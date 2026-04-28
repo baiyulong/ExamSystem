@@ -284,6 +284,7 @@ async function start() {
   const loaded = await loadInitialState({
     storageKey: STORAGE_KEY,
     createInitialState: initialState,
+    shouldCacheLoadedState: () => startupLoad.shouldApplyLoadedState(),
   });
   const startupState = startupLoad.completeLoad({ currentState: state, loaded });
   state = startupState.state;

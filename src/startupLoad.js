@@ -8,6 +8,9 @@ export function createStartupLoadController() {
         userMutatedDuringLoad = true;
       }
     },
+    shouldApplyLoadedState() {
+      return !userMutatedDuringLoad;
+    },
     completeLoad({ currentState, loaded }) {
       isLoading = false;
       if (userMutatedDuringLoad) {

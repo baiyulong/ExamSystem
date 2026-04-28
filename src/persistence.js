@@ -41,6 +41,7 @@ export async function loadInitialState({
   storageKey,
   createInitialState,
   fetchJson = fetch,
+  shouldCacheLoadedState = () => true,
 } = {}) {
   const localState = readLocalState({ storage, storageKey, createInitialState });
 
@@ -55,14 +56,17 @@ export async function loadInitialState({
         console.warn('Cloud state failed schema validation; using local cache.', error);
         return { state: localState, syncStatus: CLOUD_LOAD_FAILED };
       }
+      const shouldCache = shouldCacheLoadedState({ state: cloudState, localState });
       let localWriteSucceeded = true;
-      try {
-        writeLocalState({ state: cloudState, storage, storageKey });
-      } catch (error) {
-        localWriteSucceeded = false;
-        console.warn('Cloud state loaded but local cache update failed.', error);
+      if (shouldCache) {
+        try {
+          writeLocalState({ state: cloudState, storage, storageKey });
+        } catch (error) {
+          localWriteSucceeded = false;
+          console.warn('Cloud state loaded but local cache update failed.', error);
+        }
       }
-      return { state: cloudState, syncStatus: localWriteSucceeded ? CLOUD_SYNCED : CLOUD_ONLY };
+      return { state: cloudState, syncStatus: shouldCache && localWriteSucceeded ? CLOUD_SYNCED : CLOUD_ONLY };
     }
     return { state: localState, syncStatus: LOCAL_ONLY };
   } catch (error) {
