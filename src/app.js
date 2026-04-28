@@ -1,5 +1,14 @@
 import { knowledgePoints, paperTemplates, studyPlan } from './data.js';
 import {
+  CLOUD_LOAD_FAILED,
+  CLOUD_ONLY,
+  CLOUD_SYNCED,
+  LOCAL_ONLY,
+  SAVE_FAILED,
+  loadInitialState,
+  saveStateEverywhere,
+} from './persistence.js';
+import {
   buildDailyTasks,
   createCardsFromKnowledge,
   formatDate,
@@ -21,19 +30,34 @@ function initialState() {
   };
 }
 
-function loadState() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  return saved ? JSON.parse(saved) : initialState();
-}
-
-function saveState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-let state = loadState();
+let state = initialState();
+let syncStatus = LOCAL_ONLY;
 
 const $ = (selector) => document.querySelector(selector);
 const panels = [...document.querySelectorAll('.panel')];
+
+function syncStatusText(status) {
+  if (status === CLOUD_SYNCED) return '云端已同步';
+  if (status === CLOUD_ONLY) return '云端已保存，本地缓存失败';
+  if (status === CLOUD_LOAD_FAILED) return '云端读取失败，使用本地缓存';
+  if (status === SAVE_FAILED) return '保存失败，请检查网络或存储空间';
+  return '本地暂存';
+}
+
+function renderSyncStatus() {
+  const element = $('#sync-status');
+  if (!element) return;
+  element.textContent = syncStatusText(syncStatus);
+  element.dataset.status = syncStatus;
+}
+
+async function persistState() {
+  syncStatus = await saveStateEverywhere({
+    state,
+    storageKey: STORAGE_KEY,
+  });
+  renderSyncStatus();
+}
 
 function renderDashboard() {
   const due = getDueCards(state.cards, today()).length;
@@ -115,8 +139,8 @@ function renderReview() {
           createdAt: formatDate(today()),
         });
       }
-      saveState(state);
       renderAll();
+      persistState();
     });
   });
 }
@@ -168,8 +192,8 @@ function renderPlan() {
       state.plan = state.plan.map((item) => (
         item.id === button.dataset.plan ? { ...item, status: 'done' } : item
       ));
-      saveState(state);
       renderAll();
+      persistState();
     });
   });
 }
@@ -199,8 +223,8 @@ function renderWrongBook() {
       reason: note,
       createdAt: formatDate(today()),
     });
-    saveState(state);
     renderAll();
+    persistState();
   });
 }
 
@@ -228,6 +252,7 @@ function renderAll() {
   renderPlan();
   renderWrongBook();
   renderPaper();
+  renderSyncStatus();
 }
 
 document.querySelectorAll('.tabs button').forEach((button) => {
@@ -240,12 +265,23 @@ document.querySelectorAll('.tabs button').forEach((button) => {
 
 $('#reset-demo').addEventListener('click', () => {
   state = initialState();
-  saveState(state);
   renderAll();
+  persistState();
 });
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/service-worker.js').catch(() => {});
 }
 
-renderAll();
+async function start() {
+  renderAll();
+  const loaded = await loadInitialState({
+    storageKey: STORAGE_KEY,
+    createInitialState: initialState,
+  });
+  state = loaded.state;
+  syncStatus = loaded.syncStatus;
+  renderAll();
+}
+
+start();
