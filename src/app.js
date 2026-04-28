@@ -8,6 +8,7 @@ import {
   loadInitialState,
   saveStateEverywhere,
 } from './persistence.js';
+import { createStartupLoadController } from './startupLoad.js';
 import {
   buildDailyTasks,
   createCardsFromKnowledge,
@@ -32,6 +33,7 @@ function initialState() {
 
 let state = initialState();
 let syncStatus = LOCAL_ONLY;
+const startupLoad = createStartupLoadController();
 
 const $ = (selector) => document.querySelector(selector);
 const panels = [...document.querySelectorAll('.panel')];
@@ -128,6 +130,7 @@ function renderReview() {
   document.querySelectorAll('[data-outcome]').forEach((button) => {
     button.addEventListener('click', () => {
       const outcome = button.dataset.outcome;
+      startupLoad.recordUserMutation();
       const reviewed = recordReview(card, outcome, today());
       state.cards = state.cards.map((item) => item.id === card.id ? reviewed : item);
       if (outcome !== 'known') {
@@ -189,6 +192,7 @@ function renderPlan() {
   `;
   document.querySelectorAll('[data-plan]').forEach((button) => {
     button.addEventListener('click', () => {
+      startupLoad.recordUserMutation();
       state.plan = state.plan.map((item) => (
         item.id === button.dataset.plan ? { ...item, status: 'done' } : item
       ));
@@ -217,6 +221,7 @@ function renderWrongBook() {
   $('#add-wrong').addEventListener('click', () => {
     const note = $('#wrong-note').value.trim();
     if (!note) return;
+    startupLoad.recordUserMutation();
     state.wrongItems.unshift({
       id: `manual-${Date.now()}`,
       title: '手动错题',
@@ -264,6 +269,7 @@ document.querySelectorAll('.tabs button').forEach((button) => {
 });
 
 $('#reset-demo').addEventListener('click', () => {
+  startupLoad.recordUserMutation();
   state = initialState();
   renderAll();
   persistState();
@@ -279,9 +285,14 @@ async function start() {
     storageKey: STORAGE_KEY,
     createInitialState: initialState,
   });
-  state = loaded.state;
-  syncStatus = loaded.syncStatus;
-  renderAll();
+  const startupState = startupLoad.completeLoad({ currentState: state, loaded });
+  state = startupState.state;
+  if (startupState.shouldApplyLoadedSyncStatus) {
+    syncStatus = startupState.syncStatus;
+    renderAll();
+  } else {
+    renderSyncStatus();
+  }
 }
 
 start();
