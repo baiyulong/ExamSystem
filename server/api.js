@@ -2,6 +2,20 @@ import { StudyStateValidationError, validateStudyState } from '../src/stateSchem
 
 const MAX_BODY_BYTES = 1_000_000;
 
+class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super('Request body is too large');
+    this.name = 'RequestBodyTooLargeError';
+  }
+}
+
+class InvalidJsonBodyError extends Error {
+  constructor() {
+    super('Request body must be valid JSON');
+    this.name = 'InvalidJsonBodyError';
+  }
+}
+
 function sendJson(response, status, payload) {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(payload));
@@ -24,7 +38,7 @@ function readJsonBody(request) {
       byteLength += Buffer.byteLength(chunk, 'utf8');
       if (byteLength > MAX_BODY_BYTES) {
         request.pause();
-        fail(new Error('Request body is too large'));
+        fail(new RequestBodyTooLargeError());
         setImmediate(() => request.destroy());
         return;
       }
@@ -36,7 +50,7 @@ function readJsonBody(request) {
       try {
         resolve(body ? JSON.parse(body) : {});
       } catch {
-        reject(new Error('Request body must be valid JSON'));
+        reject(new InvalidJsonBodyError());
       }
     });
     request.on('error', fail);
@@ -75,7 +89,7 @@ export async function routeApiRequest(request, response, { repository, logger = 
       sendJson(response, 400, { error: 'Invalid study state' });
       return true;
     }
-    if (error.message === 'Request body must be valid JSON' || error.message === 'Request body is too large') {
+    if (error instanceof RequestBodyTooLargeError || error instanceof InvalidJsonBodyError) {
       sendJson(response, 400, { error: error.message });
       return true;
     }

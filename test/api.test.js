@@ -92,6 +92,68 @@ test('GET /api/state treats non-validation Invalid study state errors as 500', a
   }
 });
 
+test('GET /api/state treats repository Request body is too large errors as 500', async () => {
+  const errors = [];
+  const logger = { error: (...args) => errors.push(args) };
+  const app = await startApiServer({
+    loadState: async () => {
+      throw new Error('Request body is too large');
+    },
+    saveState: async () => {},
+    health: async () => ({ configured: true, reachable: true }),
+  }, logger);
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/state`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(payload, { error: 'Persistence service failed' });
+    assert.equal(errors.length, 1);
+    assert.deepEqual(errors[0], [
+      'API request failed',
+      {
+        method: 'GET',
+        path: '/api/state',
+        message: 'Request body is too large',
+      },
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('GET /api/state treats repository Request body must be valid JSON errors as 500', async () => {
+  const errors = [];
+  const logger = { error: (...args) => errors.push(args) };
+  const app = await startApiServer({
+    loadState: async () => {
+      throw new Error('Request body must be valid JSON');
+    },
+    saveState: async () => {},
+    health: async () => ({ configured: true, reachable: true }),
+  }, logger);
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/state`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(payload, { error: 'Persistence service failed' });
+    assert.equal(errors.length, 1);
+    assert.deepEqual(errors[0], [
+      'API request failed',
+      {
+        method: 'GET',
+        path: '/api/state',
+        message: 'Request body must be valid JSON',
+      },
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
 test('PUT /api/state returns 500 for unexpected repository errors', async () => {
   const errors = [];
   const logger = { error: (...args) => errors.push(args) };
@@ -143,6 +205,37 @@ test('unknown API routes return 404', async () => {
   } finally {
     await app.close();
   }
+});
+
+test('non-API routes return false without writing a response', async () => {
+  let wroteHead = false;
+  let ended = false;
+  const response = {
+    writeHead() {
+      wroteHead = true;
+      throw new Error('writeHead should not be called');
+    },
+    end() {
+      ended = true;
+      throw new Error('end should not be called');
+    },
+  };
+
+  const handled = await routeApiRequest({
+    method: 'GET',
+    url: '/index.html',
+  }, response, {
+    repository: {
+      loadState: async () => ({ state: null, updatedAt: null }),
+      saveState: async () => {},
+      health: async () => ({ configured: true, reachable: true }),
+    },
+    logger: { error: () => {} },
+  });
+
+  assert.equal(handled, false);
+  assert.equal(wroteHead, false);
+  assert.equal(ended, false);
 });
 
 test('GET /api/state returns the saved state', async () => {
