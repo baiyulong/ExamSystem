@@ -90,12 +90,18 @@ test('isStudyState rejects invalid card shapes', () => {
 });
 
 test('isStudyState rejects invalid plan item shapes', () => {
-  const { week, ...invalidPlanItem } = validState.plan[0];
+  assert.equal(
+    isStudyState({
+      ...validState,
+      plan: [{ ...validState.plan[0], week: -1 }],
+    }),
+    false,
+  );
 
   assert.equal(
     isStudyState({
       ...validState,
-      plan: [invalidPlanItem],
+      plan: [{ ...validState.plan[0], week: 0 }],
     }),
     false,
   );

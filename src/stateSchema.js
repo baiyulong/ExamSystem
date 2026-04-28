@@ -29,6 +29,7 @@ function isPlanItem(value) {
   return isPlainObject(value)
     && hasString(value, 'id')
     && Number.isInteger(value.week)
+    && value.week >= 1
     && hasString(value, 'phase')
     && hasString(value, 'title')
     && hasString(value, 'focus')
