@@ -47,7 +47,11 @@ export async function loadInitialState({
     const payload = await readResponseJson(response);
     if (payload.state != null) {
       const cloudState = validateStudyState(payload.state);
-      writeLocalState({ state: cloudState, storage, storageKey });
+      try {
+        writeLocalState({ state: cloudState, storage, storageKey });
+      } catch (error) {
+        console.warn('Cloud state loaded but local cache update failed.', error);
+      }
       return { state: cloudState, syncStatus: CLOUD_SYNCED };
     }
     return { state: localState, syncStatus: LOCAL_ONLY };

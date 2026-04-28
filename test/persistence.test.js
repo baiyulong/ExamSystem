@@ -160,6 +160,41 @@ test('loadInitialState recovers from corrupted local cache and still uses valid 
   }
 });
 
+test('loadInitialState returns cloud state when local cache update fails', async () => {
+  const warnings = [];
+  const storage = {
+    getItem: () => JSON.stringify({ ...savedState, startedAt: '2026-04-27' }),
+    setItem: () => {
+      throw new Error('QuotaExceededError');
+    },
+  };
+  const fetchJson = async () => ({
+    ok: true,
+    json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+  });
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    const result = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    assert.equal(result.state.startedAt, '2026-04-28');
+    assert.equal(result.syncStatus, CLOUD_SYNCED);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0][0], 'Cloud state loaded but local cache update failed.');
+    assert.match(String(warnings[0][1]), /QuotaExceededError/);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere writes local cache before saving to the backend', async () => {
   const events = [];
   const storage = memoryStorage();
