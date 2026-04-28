@@ -57,13 +57,14 @@ test('loadInitialState renders local cache first and then replaces it with cloud
   assert.deepEqual(events, ['getItem:study-state', 'fetch:/api/state']);
 });
 
-test('loadInitialState falls back to local cache when cloud load fails', async () => {
+test('loadInitialState keeps the local cache when the backend returns 200 without state', async () => {
   const storage = memoryStorage({
     'study-state': JSON.stringify(savedState),
   });
-  const fetchJson = async () => {
-    throw new Error('database offline');
-  };
+  const fetchJson = async () => ({
+    ok: true,
+    json: async () => ({ state: null, updatedAt: null }),
+  });
 
   const result = await loadInitialState({
     storage,
@@ -72,8 +73,33 @@ test('loadInitialState falls back to local cache when cloud load fails', async (
     fetchJson,
   });
 
-  assert.equal(result.state.startedAt, '2026-04-28');
-  assert.equal(result.syncStatus, CLOUD_LOAD_FAILED);
+  assert.deepEqual(result.state, savedState);
+  assert.equal(result.syncStatus, LOCAL_ONLY);
+});
+
+test('loadInitialState falls back to local cache when cloud load fails', async () => {
+  const storage = memoryStorage({
+    'study-state': JSON.stringify(savedState),
+  });
+  const fetchJson = async () => {
+    throw new Error('database offline');
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const result = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    assert.equal(result.state.startedAt, '2026-04-28');
+    assert.equal(result.syncStatus, CLOUD_LOAD_FAILED);
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 test('saveStateEverywhere writes local cache before saving to the backend', async () => {
@@ -114,16 +140,54 @@ test('saveStateEverywhere keeps local cache when backend save fails', async () =
   const storage = memoryStorage();
   const fetchJson = async () => ({
     ok: false,
+    status: 503,
     json: async () => ({ error: 'Database unavailable' }),
   });
+  const originalWarn = console.warn;
+  console.warn = () => {};
 
-  const status = await saveStateEverywhere({
-    state: savedState,
-    storage,
-    storageKey: 'study-state',
-    fetchJson,
-  });
+  try {
+    const status = await saveStateEverywhere({
+      state: savedState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
 
-  assert.equal(JSON.parse(storage.dump()['study-state']).startedAt, '2026-04-28');
-  assert.equal(status, LOCAL_ONLY);
+    assert.equal(JSON.parse(storage.dump()['study-state']).startedAt, '2026-04-28');
+    assert.equal(status, LOCAL_ONLY);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('saveStateEverywhere warns with status when backend returns non-JSON error', async () => {
+  const storage = memoryStorage();
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    const fetchJson = async () => ({
+      ok: false,
+      status: 503,
+      json: async () => {
+        throw new Error('unexpected token');
+      },
+    });
+
+    const status = await saveStateEverywhere({
+      state: savedState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    assert.equal(status, LOCAL_ONLY);
+    assert.match(String(warnings[0]), /503/);
+  } finally {
+    console.warn = originalWarn;
+  }
 });

@@ -15,11 +15,17 @@ function writeLocalState({ state, storage, storageKey }) {
 }
 
 async function readResponseJson(response) {
-  const payload = await response.json();
   if (!response.ok) {
-    throw new Error(payload.error ?? `Request failed with status ${response.status}`);
+    const detail = `Request failed with status ${response.status}`;
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new Error(detail);
+    }
+    throw new Error(payload?.error ?? detail);
   }
-  return payload;
+  return response.json();
 }
 
 export async function loadInitialState({
@@ -33,7 +39,7 @@ export async function loadInitialState({
   try {
     const response = await fetchJson('/api/state');
     const payload = await readResponseJson(response);
-    if (payload.state) {
+    if (payload.state != null) {
       const cloudState = validateStudyState(payload.state);
       writeLocalState({ state: cloudState, storage, storageKey });
       return { state: cloudState, syncStatus: CLOUD_SYNCED };
