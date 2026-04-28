@@ -19,12 +19,17 @@ export function createDatabaseStateRepository({
   connectionString = process.env.DATABASE_URL,
   pool = connectionString ? new Pool({ connectionString }) : null,
 } = {}) {
-  let schemaReady = false;
+  let schemaPromise = null;
 
   async function ensureSchema() {
-    if (!pool || schemaReady) return;
-    await pool.query(schemaSql);
-    schemaReady = true;
+    if (!pool) return;
+    if (!schemaPromise) {
+      schemaPromise = pool.query(schemaSql).catch((error) => {
+        schemaPromise = null;
+        throw error;
+      });
+    }
+    await schemaPromise;
   }
 
   return {
