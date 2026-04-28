@@ -3,6 +3,7 @@ import { validateStudyState } from './stateSchema.js';
 export const CLOUD_SYNCED = 'cloud-synced';
 export const CLOUD_LOAD_FAILED = 'cloud-load-failed';
 export const LOCAL_ONLY = 'local-only';
+export const SAVE_FAILED = 'save-failed';
 
 function readLocalState({ storage, storageKey, createInitialState }) {
   const saved = storage.getItem(storageKey);
@@ -94,9 +95,9 @@ export async function saveStateEverywhere({
   } catch (error) {
     if (localWriteSucceeded) {
       console.warn('Cloud state save failed; local cache is preserved.', error);
-    } else {
-      console.warn('Cloud state save failed after local cache write failed.', error);
+      return LOCAL_ONLY;
     }
-    return LOCAL_ONLY;
+    console.warn('Cloud state save failed after local cache write failed.', error);
+    return SAVE_FAILED;
   }
 }

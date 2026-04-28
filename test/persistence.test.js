@@ -5,6 +5,7 @@ import {
   CLOUD_LOAD_FAILED,
   CLOUD_SYNCED,
   LOCAL_ONLY,
+  SAVE_FAILED,
   loadInitialState,
   saveStateEverywhere,
 } from '../src/persistence.js';
@@ -380,7 +381,7 @@ test('saveStateEverywhere reports cloud failure after local cache write fails', 
       fetchJson,
     });
 
-    assert.equal(status, LOCAL_ONLY);
+    assert.equal(status, SAVE_FAILED);
     assert.equal(calls[0].url, '/api/state');
     assert.equal(warnings[0][0], 'Local cache write failed before cloud save.');
     assert.match(String(warnings[0][1]), /QuotaExceededError/);
