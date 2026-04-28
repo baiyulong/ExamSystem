@@ -63,6 +63,14 @@ test('isStudyState rejects invalid card shapes', () => {
     }),
     false,
   );
+
+  assert.equal(
+    isStudyState({
+      ...validState,
+      cards: [{ ...validState.cards[0], intervalIndex: -1 }],
+    }),
+    false,
+  );
 });
 
 test('isStudyState rejects invalid plan item shapes', () => {

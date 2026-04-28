@@ -16,6 +16,7 @@ function isCard(value) {
     && hasString(value, 'answer')
     && hasString(value, 'priority')
     && Number.isInteger(value.intervalIndex)
+    && value.intervalIndex >= 0
     && Number.isInteger(value.reviewCount)
     && Number.isInteger(value.lapseCount)
     && hasString(value, 'nextReviewAt')
