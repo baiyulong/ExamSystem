@@ -46,7 +46,13 @@ export async function loadInitialState({
     const response = await fetchJson('/api/state');
     const payload = await readResponseJson(response);
     if (payload.state != null) {
-      const cloudState = validateStudyState(payload.state);
+      let cloudState;
+      try {
+        cloudState = validateStudyState(payload.state);
+      } catch (error) {
+        console.warn('Cloud state failed schema validation; using local cache.', error);
+        return { state: localState, syncStatus: CLOUD_LOAD_FAILED };
+      }
       try {
         writeLocalState({ state: cloudState, storage, storageKey });
       } catch (error) {
@@ -67,9 +73,11 @@ export async function saveStateEverywhere({
   storageKey,
   fetchJson = fetch,
 } = {}) {
+  const validState = validateStudyState(state);
+
   let localWriteSucceeded = true;
   try {
-    writeLocalState({ state, storage, storageKey });
+    storage.setItem(storageKey, JSON.stringify(validState));
   } catch (error) {
     localWriteSucceeded = false;
     console.warn('Local cache write failed before cloud save.', error);
@@ -79,7 +87,7 @@ export async function saveStateEverywhere({
     const response = await fetchJson('/api/state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state }),
+      body: JSON.stringify({ state: validState }),
     });
     await readResponseJson(response);
     return CLOUD_SYNCED;

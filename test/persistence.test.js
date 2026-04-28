@@ -195,6 +195,39 @@ test('loadInitialState returns cloud state when local cache update fails', async
   }
 });
 
+test('loadInitialState falls back to local cache when cloud state is schema invalid', async () => {
+  const warnings = [];
+  const localState = { ...savedState, startedAt: '2026-04-27' };
+  const storage = memoryStorage({
+    'study-state': JSON.stringify(localState),
+  });
+  const fetchJson = async () => ({
+    ok: true,
+    json: async () => ({ state: { ...savedState, startedAt: '' }, updatedAt: '2026-04-28T00:00:00.000Z' }),
+  });
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    const result = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    assert.deepEqual(result.state, localState);
+    assert.equal(result.syncStatus, CLOUD_LOAD_FAILED);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0][0], 'Cloud state failed schema validation; using local cache.');
+    assert.match(String(warnings[0][1]), /Invalid study state/);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere writes local cache before saving to the backend', async () => {
   const events = [];
   const storage = memoryStorage();
@@ -227,6 +260,31 @@ test('saveStateEverywhere writes local cache before saving to the backend', asyn
   assert.equal(calls[0].options.method, 'PUT');
   assert.equal(status, CLOUD_SYNCED);
   assert.deepEqual(events, ['setItem:study-state', 'fetch:/api/state']);
+});
+
+test('saveStateEverywhere rejects invalid state before local or cloud writes', async () => {
+  const storage = memoryStorage();
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+    };
+  };
+
+  await assert.rejects(
+    () => saveStateEverywhere({
+      state: { ...savedState, startedAt: '' },
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    }),
+    /Invalid study state/,
+  );
+
+  assert.deepEqual(storage.dump(), {});
+  assert.equal(calls.length, 0);
 });
 
 test('saveStateEverywhere keeps local cache when backend save fails', async () => {
