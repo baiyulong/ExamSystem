@@ -1,0 +1,77 @@
+import { validateStudyState } from '../src/stateSchema.js';
+
+const MAX_BODY_BYTES = 1_000_000;
+
+function sendJson(response, status, payload) {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(payload));
+}
+
+function readJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > MAX_BODY_BYTES) {
+        reject(new Error('Request body is too large'));
+        request.destroy();
+      }
+    });
+    request.on('end', () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch {
+        reject(new Error('Request body must be valid JSON'));
+      }
+    });
+    request.on('error', reject);
+  });
+}
+
+export async function routeApiRequest(request, response, { repository, logger = console } = {}) {
+  const url = new URL(request.url ?? '/', 'http://localhost');
+
+  try {
+    if (request.method === 'GET' && url.pathname === '/api/health') {
+      sendJson(response, 200, await repository.health());
+      return true;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/state') {
+      sendJson(response, 200, await repository.loadState());
+      return true;
+    }
+
+    if (request.method === 'PUT' && url.pathname === '/api/state') {
+      const payload = await readJsonBody(request);
+      const state = validateStudyState(payload.state);
+      sendJson(response, 200, await repository.saveState(state));
+      return true;
+    }
+
+    if (url.pathname.startsWith('/api/')) {
+      sendJson(response, 404, { error: 'API route not found' });
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    if (error.message?.startsWith('Invalid study state')) {
+      sendJson(response, 400, { error: 'Invalid study state' });
+      return true;
+    }
+    if (error.message === 'Request body must be valid JSON' || error.message === 'Request body is too large') {
+      sendJson(response, 400, { error: error.message });
+      return true;
+    }
+
+    logger.error('API request failed', {
+      method: request.method,
+      path: url.pathname,
+      message: error.message,
+    });
+    sendJson(response, 500, { error: 'Persistence service failed' });
+    return true;
+  }
+}
