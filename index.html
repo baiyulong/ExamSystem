@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#1e40af">
+    <title>系统架构设计师备考系统</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">5 个月冲刺 · 记忆曲线 · 资料索引</p>
+        <h1>系统架构设计师备考系统</h1>
+        <p>每天先复习到期卡片，再推进学习计划；P0/P1 保障案例和论文，P2/P3 稳定上午分和热点素材。</p>
+      </div>
+      <button id="reset-demo" type="button">重置进度</button>
+    </header>
+
+    <main>
+      <section class="dashboard" id="dashboard"></section>
+
+      <nav class="tabs" aria-label="学习系统模块">
+        <button class="active" data-tab="tasks" type="button">今日任务</button>
+        <button data-tab="review" type="button">记忆卡片</button>
+        <button data-tab="knowledge" type="button">知识点地图</button>
+        <button data-tab="plan" type="button">20周计划</button>
+        <button data-tab="wrong" type="button">错题本</button>
+        <button data-tab="paper" type="button">论文模板</button>
+      </nav>
+
+      <section class="panel active" id="tasks"></section>
+      <section class="panel" id="review"></section>
+      <section class="panel" id="knowledge"></section>
+      <section class="panel" id="plan"></section>
+      <section class="panel" id="wrong"></section>
+      <section class="panel" id="paper"></section>
+    </main>
+
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>

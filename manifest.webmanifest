@@ -1,0 +1,9 @@
+{
+  "name": "系统架构设计师备考系统",
+  "short_name": "架构备考",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f8fc",
+  "theme_color": "#1e40af",
+  "icons": []
+}
