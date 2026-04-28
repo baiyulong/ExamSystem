@@ -102,6 +102,40 @@ test('PUT /api/state rejects invalid payloads', async () => {
   }
 });
 
+test('PUT /api/state rejects oversized multibyte payloads before validation', async () => {
+  let saveCalled = false;
+  const oversizedPadding = '汉'.repeat(333334);
+  const requestBody = JSON.stringify({
+    state: validState,
+    padding: oversizedPadding,
+  });
+
+  assert.ok(Buffer.byteLength(requestBody, 'utf8') > 1_000_000);
+
+  const app = await startApiServer({
+    loadState: async () => ({ state: null, updatedAt: null }),
+    saveState: async () => {
+      saveCalled = true;
+    },
+    health: async () => ({ configured: true, reachable: true }),
+  });
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: requestBody,
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(payload, { error: 'Request body is too large' });
+    assert.equal(saveCalled, false);
+  } finally {
+    await app.close();
+  }
+});
+
 test('GET /api/health returns repository health', async () => {
   const app = await startApiServer({
     loadState: async () => ({ state: null, updatedAt: null }),

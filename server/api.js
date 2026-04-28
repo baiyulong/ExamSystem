@@ -10,22 +10,36 @@ function sendJson(response, status, payload) {
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     let body = '';
+    let byteLength = 0;
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
     request.setEncoding('utf8');
     request.on('data', (chunk) => {
-      body += chunk;
-      if (body.length > MAX_BODY_BYTES) {
-        reject(new Error('Request body is too large'));
-        request.destroy();
+      if (settled) return;
+      byteLength += Buffer.byteLength(chunk, 'utf8');
+      if (byteLength > MAX_BODY_BYTES) {
+        request.pause();
+        fail(new Error('Request body is too large'));
+        setImmediate(() => request.destroy());
+        return;
       }
+      body += chunk;
     });
     request.on('end', () => {
+      if (settled) return;
+      settled = true;
       try {
         resolve(body ? JSON.parse(body) : {});
       } catch {
         reject(new Error('Request body must be valid JSON'));
       }
     });
-    request.on('error', reject);
+    request.on('error', fail);
   });
 }
 
