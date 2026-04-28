@@ -117,6 +117,37 @@ test('concurrent health calls only run schema DDL once', async () => {
   assert.equal(pool.calls.filter(({ sql }) => sql === 'select 1').length, 2);
 });
 
+test('health retries schema after transient failure', async () => {
+  let schemaAttempts = 0;
+  const pool = createMockPool(async (sql) => {
+    if (sql.includes('create table if not exists study_state')) {
+      schemaAttempts += 1;
+      if (schemaAttempts === 1) {
+        throw new Error('transient schema failure');
+      }
+      return { rowCount: 0, rows: [] };
+    }
+    if (sql === 'select 1') {
+      return { rowCount: 1, rows: [{ '?column?': 1 }] };
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  });
+  const repository = createDatabaseStateRepository({ pool });
+
+  await assert.deepEqual(await repository.health(), {
+    configured: true,
+    reachable: false,
+    error: 'transient schema failure',
+  });
+
+  await assert.deepEqual(await repository.health(), {
+    configured: true,
+    reachable: true,
+  });
+  assert.equal(pool.calls.filter(({ sql }) => sql.includes('create table if not exists study_state')).length, 2);
+  assert.equal(pool.calls.filter(({ sql }) => sql === 'select 1').length, 1);
+});
+
 test('health returns false and error message when the pool fails', async () => {
   const pool = createMockPool(async () => {
     throw new Error('boom');
