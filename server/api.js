@@ -1,4 +1,4 @@
-import { validateStudyState } from '../src/stateSchema.js';
+import { StudyStateValidationError, validateStudyState } from '../src/stateSchema.js';
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -71,7 +71,7 @@ export async function routeApiRequest(request, response, { repository, logger = 
 
     return false;
   } catch (error) {
-    if (error.message?.startsWith('Invalid study state')) {
+    if (error instanceof StudyStateValidationError) {
       sendJson(response, 400, { error: 'Invalid study state' });
       return true;
     }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isStudyState, validateStudyState } from '../src/stateSchema.js';
+import { StudyStateValidationError, isStudyState, validateStudyState } from '../src/stateSchema.js';
 
 const validState = {
   cards: [
@@ -136,8 +136,9 @@ test('validateStudyState returns the original state for valid input', () => {
 });
 
 test('validateStudyState throws a clear error for invalid input', () => {
-  assert.throws(
-    () => validateStudyState({ cards: [], plan: [], startedAt: '2026-04-28' }),
-    /Invalid study state/,
-  );
+  assert.throws(() => validateStudyState({ cards: [], plan: [], startedAt: '2026-04-28' }), (error) => {
+    assert.ok(error instanceof StudyStateValidationError);
+    assert.equal(error.message, 'Invalid study state: expected cards, plan, wrongItems, and startedAt');
+    return true;
+  });
 });

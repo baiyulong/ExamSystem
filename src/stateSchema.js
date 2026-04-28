@@ -1,5 +1,12 @@
 const REQUIRED_STATE_ARRAYS = ['cards', 'plan', 'wrongItems'];
 
+export class StudyStateValidationError extends Error {
+  constructor() {
+    super('Invalid study state: expected cards, plan, wrongItems, and startedAt');
+    this.name = 'StudyStateValidationError';
+  }
+}
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -55,7 +62,7 @@ export function isStudyState(value) {
 
 export function validateStudyState(value) {
   if (!isStudyState(value)) {
-    throw new Error('Invalid study state: expected cards, plan, wrongItems, and startedAt');
+    throw new StudyStateValidationError();
   }
   return value;
 }
