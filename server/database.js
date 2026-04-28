@@ -52,8 +52,14 @@ export function createDatabaseStateRepository({
         [STATE_ROW_ID],
       );
       if (result.rowCount === 0) return { state: null, updatedAt: null };
+      let state;
+      try {
+        state = validateStudyState(result.rows[0].state);
+      } catch (error) {
+        throw new Error('Stored study state failed validation', { cause: error });
+      }
       return {
-        state: validateStudyState(result.rows[0].state),
+        state,
         updatedAt: result.rows[0].updated_at.toISOString(),
       };
     },
@@ -78,7 +84,7 @@ export function createDatabaseStateRepository({
         [STATE_ROW_ID, JSON.stringify(validState)],
       );
       return {
-        state: validateStudyState(result.rows[0].state),
+        state: validState,
         updatedAt: result.rows[0].updated_at.toISOString(),
       };
     },

@@ -207,6 +207,32 @@ test('loadState validates and returns state plus ISO updatedAt', async () => {
   });
 });
 
+test('loadState wraps stored invalid state as a persistence error', async () => {
+  const pool = createMockPool(async (sql) => {
+    if (sql.includes('create table if not exists study_state')) {
+      return { rowCount: 0, rows: [] };
+    }
+    if (sql.includes('select state, updated_at from study_state where id = $1')) {
+      return {
+        rowCount: 1,
+        rows: [{ state: { startedAt: '2026-04-28' }, updated_at: new Date('2026-04-28T10:20:30.000Z') }],
+      };
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  });
+  const repository = createDatabaseStateRepository({ pool });
+
+  await assert.rejects(
+    () => repository.loadState(),
+    (error) => {
+      assert.equal(error instanceof StudyStateValidationError, false);
+      assert.match(error.message, /Stored study state failed validation/);
+      assert.ok(error.cause instanceof StudyStateValidationError);
+      return true;
+    },
+  );
+});
+
 test('saveState throws when DATABASE_URL is not configured', async () => {
   const repository = createDatabaseStateRepository({ pool: null });
 
@@ -238,6 +264,29 @@ test('saveState upserts and returns saved state plus ISO updatedAt', async () =>
     if (sql.includes('insert into study_state')) {
       assert.deepEqual(params, ['default', JSON.stringify(validState)]);
       return { rowCount: 1, rows: [{ state: validState, updated_at: updatedAt }] };
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  });
+  const repository = createDatabaseStateRepository({ pool });
+
+  await assert.deepEqual(await repository.saveState(validState), {
+    state: validState,
+    updatedAt: updatedAt.toISOString(),
+  });
+});
+
+test('saveState returns the validated input state even if the database echoes malformed state', async () => {
+  const updatedAt = new Date('2026-04-28T11:22:33.000Z');
+  const pool = createMockPool(async (sql, params) => {
+    if (sql.includes('create table if not exists study_state')) {
+      return { rowCount: 0, rows: [] };
+    }
+    if (sql.includes('insert into study_state')) {
+      assert.deepEqual(params, ['default', JSON.stringify(validState)]);
+      return {
+        rowCount: 1,
+        rows: [{ state: { cards: [] }, updated_at: updatedAt }],
+      };
     }
     throw new Error(`Unexpected SQL: ${sql}`);
   });
