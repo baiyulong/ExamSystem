@@ -50,6 +50,45 @@ test('isStudyState rejects missing required collections', () => {
   assert.equal(isStudyState({ ...validState, wrongItems: undefined }), false);
 });
 
+test('isStudyState rejects missing or empty startedAt', () => {
+  assert.equal(isStudyState({ ...validState, startedAt: undefined }), false);
+  assert.equal(isStudyState({ ...validState, startedAt: '' }), false);
+});
+
+test('isStudyState rejects invalid card shapes', () => {
+  assert.equal(
+    isStudyState({
+      ...validState,
+      cards: [{ ...validState.cards[0], intervalIndex: 'not-a-number' }],
+    }),
+    false,
+  );
+});
+
+test('isStudyState rejects invalid plan item shapes', () => {
+  const { week, ...invalidPlanItem } = validState.plan[0];
+
+  assert.equal(
+    isStudyState({
+      ...validState,
+      plan: [invalidPlanItem],
+    }),
+    false,
+  );
+});
+
+test('isStudyState rejects invalid wrong item shapes', () => {
+  const { reason, ...invalidWrongItem } = validState.wrongItems[0];
+
+  assert.equal(
+    isStudyState({
+      ...validState,
+      wrongItems: [invalidWrongItem],
+    }),
+    false,
+  );
+});
+
 test('validateStudyState returns the original state for valid input', () => {
   assert.equal(validateStudyState(validState), validState);
 });
