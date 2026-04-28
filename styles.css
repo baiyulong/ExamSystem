@@ -67,6 +67,61 @@ textarea {
   font-weight: 700;
 }
 
+.hero-actions {
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+.hero-actions button {
+  align-self: auto;
+}
+
+.sync-status {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, .36);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, .14);
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sync-status[data-status="cloud-synced"] {
+  border-color: #bbf7d0;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.sync-status[data-status="cloud-only"] {
+  border-color: #bfdbfe;
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.sync-status[data-status="cloud-load-failed"] {
+  border-color: #fed7aa;
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.sync-status[data-status="local-only"] {
+  border-color: rgba(255, 255, 255, .44);
+  background: rgba(255, 255, 255, .16);
+  color: white;
+}
+
+.sync-status[data-status="save-failed"] {
+  border-color: #fecaca;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 main {
   width: min(1180px, calc(100% - 28px));
   margin: -28px auto 48px;
@@ -252,7 +307,8 @@ textarea {
     display: block;
   }
 
-  .hero button {
+  .hero-actions {
+    align-items: flex-start;
     margin-top: 18px;
   }
 
