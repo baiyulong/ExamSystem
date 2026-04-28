@@ -254,6 +254,85 @@ test('saveStateEverywhere keeps local cache when backend save fails', async () =
   }
 });
 
+test('saveStateEverywhere syncs cloud when local cache write fails', async () => {
+  const warnings = [];
+  const storage = {
+    getItem: () => null,
+    setItem: () => {
+      throw new Error('QuotaExceededError');
+    },
+  };
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    const status = await saveStateEverywhere({
+      state: savedState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    assert.equal(status, CLOUD_SYNCED);
+    assert.equal(calls[0].url, '/api/state');
+    assert.equal(warnings[0][0], 'Local cache write failed before cloud save.');
+    assert.match(String(warnings[0][1]), /QuotaExceededError/);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('saveStateEverywhere reports cloud failure after local cache write fails', async () => {
+  const warnings = [];
+  const storage = {
+    getItem: () => null,
+    setItem: () => {
+      throw new Error('QuotaExceededError');
+    },
+  };
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: false,
+      status: 503,
+      json: async () => ({ error: 'Database unavailable' }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    const status = await saveStateEverywhere({
+      state: savedState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    assert.equal(status, LOCAL_ONLY);
+    assert.equal(calls[0].url, '/api/state');
+    assert.equal(warnings[0][0], 'Local cache write failed before cloud save.');
+    assert.match(String(warnings[0][1]), /QuotaExceededError/);
+    assert.equal(warnings[1][0], 'Cloud state save failed after local cache write failed.');
+    assert.match(String(warnings[1][1]), /Database unavailable/);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere warns with status when backend returns non-JSON error', async () => {
   const storage = memoryStorage();
   const warnings = [];

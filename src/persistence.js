@@ -67,7 +67,13 @@ export async function saveStateEverywhere({
   storageKey,
   fetchJson = fetch,
 } = {}) {
-  writeLocalState({ state, storage, storageKey });
+  let localWriteSucceeded = true;
+  try {
+    writeLocalState({ state, storage, storageKey });
+  } catch (error) {
+    localWriteSucceeded = false;
+    console.warn('Local cache write failed before cloud save.', error);
+  }
 
   try {
     const response = await fetchJson('/api/state', {
@@ -78,7 +84,11 @@ export async function saveStateEverywhere({
     await readResponseJson(response);
     return CLOUD_SYNCED;
   } catch (error) {
-    console.warn('Cloud state save failed; local cache is preserved.', error);
+    if (localWriteSucceeded) {
+      console.warn('Cloud state save failed; local cache is preserved.', error);
+    } else {
+      console.warn('Cloud state save failed after local cache write failed.', error);
+    }
     return LOCAL_ONLY;
   }
 }
