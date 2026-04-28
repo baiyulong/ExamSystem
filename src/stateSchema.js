@@ -18,7 +18,9 @@ function isCard(value) {
     && Number.isInteger(value.intervalIndex)
     && value.intervalIndex >= 0
     && Number.isInteger(value.reviewCount)
+    && value.reviewCount >= 0
     && Number.isInteger(value.lapseCount)
+    && value.lapseCount >= 0
     && hasString(value, 'nextReviewAt')
     && hasString(value, 'status');
 }

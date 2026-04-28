@@ -71,6 +71,22 @@ test('isStudyState rejects invalid card shapes', () => {
     }),
     false,
   );
+
+  assert.equal(
+    isStudyState({
+      ...validState,
+      cards: [{ ...validState.cards[0], reviewCount: -1 }],
+    }),
+    false,
+  );
+
+  assert.equal(
+    isStudyState({
+      ...validState,
+      cards: [{ ...validState.cards[0], lapseCount: -1 }],
+    }),
+    false,
+  );
 });
 
 test('isStudyState rejects invalid plan item shapes', () => {
@@ -94,6 +110,18 @@ test('isStudyState rejects invalid wrong item shapes', () => {
       wrongItems: [invalidWrongItem],
     }),
     false,
+  );
+});
+
+test('isStudyState accepts wrong items without cardId', () => {
+  const { cardId, ...manualWrongItem } = validState.wrongItems[0];
+
+  assert.equal(
+    isStudyState({
+      ...validState,
+      wrongItems: [manualWrongItem],
+    }),
+    true,
   );
 });
 
