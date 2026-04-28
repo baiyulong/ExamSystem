@@ -10,16 +10,27 @@ const requiredStatuses = [
   'save-failed',
 ];
 
+const getAttribute = (attributes, name) => {
+  const match = attributes.match(new RegExp(`\\s${name}="([^"]*)"`));
+  return match?.[1];
+};
+
 test('hero exposes a sync status badge next to the reset button', async () => {
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
   const heroActions = html.match(/<div\s+class="hero-actions">[\s\S]*?<\/div>/);
 
   assert.ok(heroActions, 'expected a .hero-actions container in the header');
-  assert.match(
-    heroActions[0],
-    /<span\s+id="sync-status"\s+class="sync-status"\s+data-status="local-only">本地暂存<\/span>/,
-    'expected sync status badge with local-only initial state',
-  );
+  const syncStatus = heroActions[0].match(/<span\b([^>]*)>([^<]*)<\/span>/);
+  assert.ok(syncStatus, 'expected sync status badge in the hero actions');
+
+  const [, syncStatusAttributes, syncStatusText] = syncStatus;
+  assert.equal(getAttribute(syncStatusAttributes, 'id'), 'sync-status');
+  assert.equal(getAttribute(syncStatusAttributes, 'class'), 'sync-status');
+  assert.equal(getAttribute(syncStatusAttributes, 'data-status'), 'local-only');
+  assert.equal(getAttribute(syncStatusAttributes, 'role'), 'status');
+  assert.equal(getAttribute(syncStatusAttributes, 'aria-live'), 'polite');
+  assert.equal(getAttribute(syncStatusAttributes, 'aria-atomic'), 'true');
+  assert.equal(syncStatusText, '本地暂存');
   assert.match(
     heroActions[0],
     /<button\s+id="reset-demo"\s+type="button">重置进度<\/button>/,
