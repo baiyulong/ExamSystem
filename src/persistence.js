@@ -7,7 +7,13 @@ export const LOCAL_ONLY = 'local-only';
 function readLocalState({ storage, storageKey, createInitialState }) {
   const saved = storage.getItem(storageKey);
   if (!saved) return createInitialState();
-  return validateStudyState(JSON.parse(saved));
+
+  try {
+    return validateStudyState(JSON.parse(saved));
+  } catch (error) {
+    console.warn('Local study state is invalid; starting from a fresh state.', error);
+    return createInitialState();
+  }
 }
 
 function writeLocalState({ state, storage, storageKey }) {

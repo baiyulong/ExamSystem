@@ -102,6 +102,64 @@ test('loadInitialState falls back to local cache when cloud load fails', async (
   }
 });
 
+test('loadInitialState returns local cache when the backend responds with a non-ok error body', async () => {
+  const storage = memoryStorage({
+    'study-state': JSON.stringify(savedState),
+  });
+  const fetchJson = async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({ error: 'Service unavailable' }),
+  });
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const result = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    assert.deepEqual(result.state, savedState);
+    assert.equal(result.syncStatus, CLOUD_LOAD_FAILED);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('loadInitialState recovers from corrupted local cache and still uses valid cloud state', async () => {
+  const warnings = [];
+  const storage = memoryStorage({
+    'study-state': '{not valid json',
+  });
+  const fetchJson = async () => ({
+    ok: true,
+    json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+  });
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    const result = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    assert.equal(result.state.startedAt, '2026-04-28');
+    assert.equal(result.syncStatus, CLOUD_SYNCED);
+    assert.ok(warnings.length > 0);
+    assert.match(String(warnings[0][0]), /Local study state is invalid/);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere writes local cache before saving to the backend', async () => {
   const events = [];
   const storage = memoryStorage();
