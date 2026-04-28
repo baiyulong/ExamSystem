@@ -188,7 +188,7 @@ test('loadInitialState returns cloud state when local cache update fails', async
     });
 
     assert.equal(result.state.startedAt, '2026-04-28');
-    assert.equal(result.syncStatus, CLOUD_SYNCED);
+    assert.equal(result.syncStatus, CLOUD_ONLY);
     assert.equal(warnings.length, 1);
     assert.equal(warnings[0][0], 'Cloud state loaded but local cache update failed.');
     assert.match(String(warnings[0][1]), /QuotaExceededError/);
