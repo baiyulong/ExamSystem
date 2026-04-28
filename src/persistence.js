@@ -7,7 +7,13 @@ export const LOCAL_ONLY = 'local-only';
 export const SAVE_FAILED = 'save-failed';
 
 function readLocalState({ storage, storageKey, createInitialState }) {
-  const saved = storage.getItem(storageKey);
+  let saved;
+  try {
+    saved = storage.getItem(storageKey);
+  } catch (error) {
+    console.warn('Local study state is invalid; starting from a fresh state.', error);
+    return createInitialState();
+  }
   if (!saved) return createInitialState();
 
   try {
@@ -20,6 +26,11 @@ function readLocalState({ storage, storageKey, createInitialState }) {
 
 function writeLocalState({ state, storage, storageKey }) {
   storage.setItem(storageKey, JSON.stringify(state));
+}
+
+// Preserve the exact save-call snapshot until its queued cloud write runs.
+function cloneStudyState(state) {
+  return JSON.parse(JSON.stringify(state));
 }
 
 async function readResponseJson(response) {
@@ -75,27 +86,16 @@ export async function loadInitialState({
   }
 }
 
-export async function saveStateEverywhere({
+async function saveCloudState({
   state,
-  storage = localStorage,
-  storageKey,
-  fetchJson = fetch,
-} = {}) {
-  const validState = validateStudyState(state);
-
-  let localWriteSucceeded = true;
-  try {
-    writeLocalState({ state: validState, storage, storageKey });
-  } catch (error) {
-    localWriteSucceeded = false;
-    console.warn('Local cache write failed before cloud save.', error);
-  }
-
+  fetchJson,
+  localWriteSucceeded,
+}) {
   try {
     const response = await fetchJson('/api/state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: validState }),
+      body: JSON.stringify({ state }),
     });
     await readResponseJson(response);
     return localWriteSucceeded ? CLOUD_SYNCED : CLOUD_ONLY;
@@ -107,4 +107,30 @@ export async function saveStateEverywhere({
     console.warn('Cloud state save failed after local cache write failed.', error);
     return SAVE_FAILED;
   }
+}
+
+let stateSaveQueue = Promise.resolve();
+
+export async function saveStateEverywhere({
+  state,
+  storage = localStorage,
+  storageKey,
+  fetchJson = fetch,
+} = {}) {
+  const validState = cloneStudyState(validateStudyState(state));
+  let localWriteSucceeded = true;
+  try {
+    writeLocalState({ state: validState, storage, storageKey });
+  } catch (error) {
+    localWriteSucceeded = false;
+    console.warn('Local cache write failed before cloud save.', error);
+  }
+
+  const queuedSave = stateSaveQueue.then(() => saveCloudState({
+    state: validState,
+    fetchJson,
+    localWriteSucceeded,
+  }));
+  stateSaveQueue = queuedSave.catch(() => undefined);
+  return queuedSave;
 }

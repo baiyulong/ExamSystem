@@ -27,6 +27,16 @@ function memoryStorage(initial = {}) {
   };
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 test('loadInitialState renders local cache first and then replaces it with cloud state', async () => {
   const events = [];
   const storage = memoryStorage({
@@ -162,6 +172,41 @@ test('loadInitialState recovers from corrupted local cache and still uses valid 
   }
 });
 
+test('loadInitialState recovers when local cache read throws and still uses valid cloud state', async () => {
+  const warnings = [];
+  const storage = {
+    getItem: () => {
+      throw new Error('SecurityError');
+    },
+    setItem: () => {},
+  };
+  const fetchJson = async () => ({
+    ok: true,
+    json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+  });
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+
+  try {
+    const result = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    assert.deepEqual(result.state, savedState);
+    assert.equal(result.syncStatus, CLOUD_SYNCED);
+    assert.ok(warnings.length > 0);
+    assert.match(String(warnings[0][0]), /Local study state is invalid/);
+    assert.match(String(warnings[0][1]), /SecurityError/);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('loadInitialState returns cloud state when local cache update fails', async () => {
   const warnings = [];
   const storage = {
@@ -262,6 +307,125 @@ test('saveStateEverywhere writes local cache before saving to the backend', asyn
   assert.equal(calls[0].options.method, 'PUT');
   assert.equal(status, CLOUD_SYNCED);
   assert.deepEqual(events, ['setItem:study-state', 'fetch:/api/state']);
+});
+
+test('saveStateEverywhere sends queued saves in mutation order even when the first cloud save is slower', async () => {
+  const storage = memoryStorage();
+  const firstSave = deferred();
+  const secondSave = deferred();
+  const cloudWrites = [];
+  const olderState = { ...savedState, startedAt: '2026-04-27' };
+  const newerState = { ...savedState, startedAt: '2026-04-28' };
+  const fetchJson = async (url, options) => {
+    const body = JSON.parse(options.body);
+    cloudWrites.push({ url, startedAt: body.state.startedAt });
+    if (cloudWrites.length === 1) return firstSave.promise;
+    if (cloudWrites.length === 2) return secondSave.promise;
+    throw new Error('unexpected extra cloud save');
+  };
+
+  try {
+    const olderSavePromise = saveStateEverywhere({
+      state: olderState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    const newerSavePromise = saveStateEverywhere({
+      state: newerState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    olderState.startedAt = '2026-04-26';
+    newerState.startedAt = '2026-04-29';
+
+    await Promise.resolve();
+    assert.deepEqual(
+      cloudWrites.map((write) => write.startedAt),
+      ['2026-04-27'],
+      'newer cloud save must wait for the older save to finish',
+    );
+
+    firstSave.resolve({
+      ok: true,
+      json: async () => ({ state: olderState, updatedAt: '2026-04-27T00:00:00.000Z' }),
+    });
+    assert.equal(await olderSavePromise, CLOUD_SYNCED);
+    await Promise.resolve();
+    assert.deepEqual(
+      cloudWrites.map((write) => write.startedAt),
+      ['2026-04-27', '2026-04-28'],
+    );
+
+    secondSave.resolve({
+      ok: true,
+      json: async () => ({ state: newerState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+    });
+    assert.equal(await newerSavePromise, CLOUD_SYNCED);
+    assert.equal(cloudWrites.at(-1).startedAt, '2026-04-28');
+  } finally {
+    firstSave.resolve({
+      ok: true,
+      json: async () => ({ state: olderState, updatedAt: '2026-04-27T00:00:00.000Z' }),
+    });
+    secondSave.resolve({
+      ok: true,
+      json: async () => ({ state: newerState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+    });
+  }
+});
+
+test('saveStateEverywhere continues queued saves after a failed cloud save', async () => {
+  const storage = memoryStorage();
+  const firstSave = deferred();
+  const cloudWrites = [];
+  const failedState = { ...savedState, startedAt: '2026-04-27' };
+  const recoveredState = { ...savedState, startedAt: '2026-04-28' };
+  const fetchJson = async (url, options) => {
+    const body = JSON.parse(options.body);
+    cloudWrites.push(body.state.startedAt);
+    if (cloudWrites.length === 1) return firstSave.promise;
+    return {
+      ok: true,
+      json: async () => ({ state: recoveredState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const failedSavePromise = saveStateEverywhere({
+      state: failedState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    const recoveredSavePromise = saveStateEverywhere({
+      state: recoveredState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    await Promise.resolve();
+    assert.deepEqual(cloudWrites, ['2026-04-27']);
+
+    firstSave.resolve({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: 'offline' }),
+    });
+    assert.equal(await failedSavePromise, LOCAL_ONLY);
+    assert.equal(await recoveredSavePromise, CLOUD_SYNCED);
+    assert.deepEqual(cloudWrites, ['2026-04-27', '2026-04-28']);
+  } finally {
+    firstSave.resolve({
+      ok: true,
+      json: async () => ({ state: failedState, updatedAt: '2026-04-27T00:00:00.000Z' }),
+    });
+    console.warn = originalWarn;
+  }
 });
 
 test('saveStateEverywhere rejects invalid state before local or cloud writes', async () => {
