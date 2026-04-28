@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   CLOUD_LOAD_FAILED,
+  CLOUD_ONLY,
   CLOUD_SYNCED,
   LOCAL_ONLY,
   SAVE_FAILED,
@@ -313,7 +314,7 @@ test('saveStateEverywhere keeps local cache when backend save fails', async () =
   }
 });
 
-test('saveStateEverywhere syncs cloud when local cache write fails', async () => {
+test('saveStateEverywhere reports cloud-only when local cache write fails', async () => {
   const warnings = [];
   const storage = {
     getItem: () => null,
@@ -342,7 +343,7 @@ test('saveStateEverywhere syncs cloud when local cache write fails', async () =>
       fetchJson,
     });
 
-    assert.equal(status, CLOUD_SYNCED);
+    assert.equal(status, CLOUD_ONLY);
     assert.equal(calls[0].url, '/api/state');
     assert.equal(warnings[0][0], 'Local cache write failed before cloud save.');
     assert.match(String(warnings[0][1]), /QuotaExceededError/);

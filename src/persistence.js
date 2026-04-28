@@ -1,6 +1,7 @@
 import { validateStudyState } from './stateSchema.js';
 
 export const CLOUD_SYNCED = 'cloud-synced';
+export const CLOUD_ONLY = 'cloud-only';
 export const CLOUD_LOAD_FAILED = 'cloud-load-failed';
 export const LOCAL_ONLY = 'local-only';
 export const SAVE_FAILED = 'save-failed';
@@ -18,7 +19,7 @@ function readLocalState({ storage, storageKey, createInitialState }) {
 }
 
 function writeLocalState({ state, storage, storageKey }) {
-  storage.setItem(storageKey, JSON.stringify(validateStudyState(state)));
+  storage.setItem(storageKey, JSON.stringify(state));
 }
 
 async function readResponseJson(response) {
@@ -78,7 +79,7 @@ export async function saveStateEverywhere({
 
   let localWriteSucceeded = true;
   try {
-    storage.setItem(storageKey, JSON.stringify(validState));
+    writeLocalState({ state: validState, storage, storageKey });
   } catch (error) {
     localWriteSucceeded = false;
     console.warn('Local cache write failed before cloud save.', error);
@@ -91,7 +92,7 @@ export async function saveStateEverywhere({
       body: JSON.stringify({ state: validState }),
     });
     await readResponseJson(response);
-    return CLOUD_SYNCED;
+    return localWriteSucceeded ? CLOUD_SYNCED : CLOUD_ONLY;
   } catch (error) {
     if (localWriteSucceeded) {
       console.warn('Cloud state save failed; local cache is preserved.', error);
