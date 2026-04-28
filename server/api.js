@@ -59,7 +59,7 @@ export async function routeApiRequest(request, response, { repository, logger = 
 
     if (request.method === 'PUT' && url.pathname === '/api/state') {
       const payload = await readJsonBody(request);
-      const state = validateStudyState(payload.state);
+      const state = validateStudyState(payload?.state);
       sendJson(response, 200, await repository.saveState(state));
       return true;
     }

@@ -217,6 +217,58 @@ test('PUT /api/state rejects invalid payloads', async () => {
   }
 });
 
+test('PUT /api/state rejects null payloads', async () => {
+  let saveCalled = false;
+  const app = await startApiServer({
+    loadState: async () => ({ state: null, updatedAt: null }),
+    saveState: async () => {
+      saveCalled = true;
+    },
+    health: async () => ({ configured: true, reachable: true }),
+  });
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: 'null',
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(payload, { error: 'Invalid study state' });
+    assert.equal(saveCalled, false);
+  } finally {
+    await app.close();
+  }
+});
+
+test('PUT /api/state rejects empty payload objects', async () => {
+  let saveCalled = false;
+  const app = await startApiServer({
+    loadState: async () => ({ state: null, updatedAt: null }),
+    saveState: async () => {
+      saveCalled = true;
+    },
+    health: async () => ({ configured: true, reachable: true }),
+  });
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(payload, { error: 'Invalid study state' });
+    assert.equal(saveCalled, false);
+  } finally {
+    await app.close();
+  }
+});
+
 test('PUT /api/state rejects oversized multibyte payloads before validation', async () => {
   let saveCalled = false;
   const oversizedPadding = '汉'.repeat(333334);
