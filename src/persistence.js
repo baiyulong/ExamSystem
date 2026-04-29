@@ -108,7 +108,7 @@ function markLocalDirty({ saveId, storage, storageKey }) {
   return true;
 }
 
-function markLocalClean({ expectedSaveId, storage, storageKey }) {
+function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, storageKey }) {
   try {
     const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
     if (expectedSaveId && latestLocalSaveAttemptId && latestLocalSaveAttemptId !== expectedSaveId) {
@@ -126,11 +126,12 @@ function markLocalClean({ expectedSaveId, storage, storageKey }) {
       return;
     }
     const knownCloudVersion = getKnownCloudVersion({ storage, storageKey });
+    const shouldRememberCloudVersion = rememberCloudVersion && knownCloudVersion.known;
     writeLocalSyncMetadata({
       dirty: false,
       saveId: expectedSaveId ?? currentMetadata.saveId,
-      cloudVersion: knownCloudVersion.known ? knownCloudVersion.version : currentMetadata.cloudVersion,
-      cloudVersionKnown: knownCloudVersion.known || currentMetadata.cloudVersionKnown,
+      cloudVersion: shouldRememberCloudVersion ? knownCloudVersion.version : currentMetadata.cloudVersion,
+      cloudVersionKnown: shouldRememberCloudVersion || (!rememberCloudVersion ? false : currentMetadata.cloudVersionKnown),
       storage,
       storageKey,
     });
@@ -274,7 +275,12 @@ async function saveCloudState({
     });
     const payload = await readResponseJson(response);
     setKnownCloudVersion({ storage, storageKey, version: payload.version });
-    markLocalClean({ expectedSaveId: localSaveId, storage, storageKey });
+    markLocalClean({
+      expectedSaveId: localSaveId,
+      rememberCloudVersion: localWriteSucceeded,
+      storage,
+      storageKey,
+    });
     return localWriteSucceeded ? CLOUD_SYNCED : CLOUD_ONLY;
   } catch (error) {
     if (localWriteSucceeded && localDirtyMetadataSucceeded) {
@@ -298,9 +304,9 @@ export async function saveStateEverywhere({
   let localWriteSucceeded = true;
   let localDirtyMetadataSucceeded = false;
   const localSaveId = nextLocalSaveId();
+  latestLocalSaveAttemptId = localSaveId;
   try {
     writeLocalState({ state: validState, storage, storageKey });
-    latestLocalSaveAttemptId = localSaveId;
     localDirtyMetadataSucceeded = markLocalDirty({ saveId: localSaveId, storage, storageKey });
   } catch (error) {
     localWriteSucceeded = false;

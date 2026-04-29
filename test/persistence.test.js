@@ -1166,6 +1166,83 @@ test('older cloud success does not clear dirty marker after newer metadata write
   }
 });
 
+test('successful cloud-only save supersedes older dirty local cache after local write failure', async () => {
+  const backingStorage = memoryStorage();
+  let failNextStateWrite = false;
+  const storage = {
+    getItem: backingStorage.getItem,
+    setItem: (key, value) => {
+      if (key === 'study-state' && failNextStateWrite) {
+        failNextStateWrite = false;
+        throw new Error('QuotaExceededError');
+      }
+      backingStorage.setItem(key, value);
+    },
+    dump: backingStorage.dump,
+  };
+  const olderState = { ...savedState, startedAt: '2026-04-27' };
+  const newerCloudState = { ...savedState, startedAt: '2026-04-30' };
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    if (options?.method === 'PUT') {
+      const requestBody = JSON.parse(options.body);
+      if (requestBody.state.startedAt === olderState.startedAt) {
+        return {
+          ok: false,
+          status: 503,
+          json: async () => ({ error: 'offline' }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ state: newerCloudState, updatedAt: '2026-04-30T00:00:00.000Z', version: 9 }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ state: newerCloudState, updatedAt: '2026-04-30T00:00:00.000Z', version: 9 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const olderStatus = await saveStateEverywhere({
+      state: olderState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    failNextStateWrite = true;
+    const newerStatus = await saveStateEverywhere({
+      state: newerCloudState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    const metadataAfterCloudOnlySave = JSON.parse(storage.dump()['study-state:sync-metadata']);
+    const loaded = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson,
+    });
+
+    assert.equal(olderStatus, LOCAL_ONLY);
+    assert.equal(newerStatus, CLOUD_ONLY);
+    assert.equal(metadataAfterCloudOnlySave.dirty, false);
+    assert.equal(Object.hasOwn(metadataAfterCloudOnlySave, 'cloudVersion'), false);
+    assert.equal(calls.some((call) => call.url === '/api/state' && !call.options), true);
+    assert.deepEqual(loaded.state, newerCloudState);
+    assert.equal(loaded.syncStatus, CLOUD_SYNCED);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), newerCloudState);
+    assert.equal(JSON.parse(storage.dump()['study-state:sync-metadata']).dirty, false);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere reports cloud-only when local cache write fails', async () => {
   const warnings = [];
   const storage = {
