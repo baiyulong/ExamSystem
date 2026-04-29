@@ -360,6 +360,112 @@ test('loadInitialState treats unreadable sync metadata with valid local state as
   }
 });
 
+test('saveStateEverywhere uses expectedVersion 0 after malformed sync metadata and preserves dirty local state on conflict', async () => {
+  const localState = { ...savedState, startedAt: '2026-04-29' };
+  const storage = memoryStorage({
+    'study-state': JSON.stringify(localState),
+    'study-state:sync-metadata': '{not valid json',
+  });
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Study state conflict' }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const status = await saveStateEverywhere({
+      state: localState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    const putBody = JSON.parse(calls[0].options.body);
+    const metadata = JSON.parse(storage.dump()['study-state:sync-metadata']);
+    assert.equal(putBody.expectedVersion, 0);
+    assert.equal(status, LOCAL_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), localState);
+    assert.equal(metadata.dirty, true);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('saveStateEverywhere uses expectedVersion 0 when sync metadata is missing before any cloud load', async () => {
+  const storage = memoryStorage();
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z', version: 1 }),
+    };
+  };
+
+  const status = await saveStateEverywhere({
+    state: savedState,
+    storage,
+    storageKey: 'study-state',
+    fetchJson,
+  });
+
+  const putBody = JSON.parse(calls[0].options.body);
+  assert.equal(putBody.expectedVersion, 0);
+  assert.equal(status, CLOUD_SYNCED);
+});
+
+test('saveStateEverywhere uses expectedVersion 0 after cloud load failure and preserves dirty local state on conflict', async () => {
+  const localState = { ...savedState, startedAt: '2026-04-29' };
+  const storage = memoryStorage({
+    'study-state': JSON.stringify(localState),
+  });
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    if (options?.method === 'PUT') {
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'Study state conflict' }),
+      };
+    }
+    throw new Error('database offline');
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const loaded = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+    const status = await saveStateEverywhere({
+      state: localState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    const putBody = JSON.parse(calls.find((call) => call.options?.method === 'PUT').options.body);
+    const metadata = JSON.parse(storage.dump()['study-state:sync-metadata']);
+    assert.equal(loaded.syncStatus, CLOUD_LOAD_FAILED);
+    assert.equal(putBody.expectedVersion, 0);
+    assert.equal(status, LOCAL_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), localState);
+    assert.equal(metadata.dirty, true);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere writes local cache before saving to the backend', async () => {
   const events = [];
   const storage = memoryStorage();

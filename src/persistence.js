@@ -263,10 +263,10 @@ async function saveCloudState({
 }) {
   try {
     const expectedVersion = getCloudVersionForSave({ storage, storageKey });
-    const requestBody = { state };
-    if (expectedVersion.known) {
-      requestBody.expectedVersion = expectedVersion.version ?? 0;
-    }
+    const requestBody = {
+      state,
+      expectedVersion: expectedVersion.known ? expectedVersion.version ?? 0 : 0,
+    };
     const response = await fetchJson('/api/state', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
