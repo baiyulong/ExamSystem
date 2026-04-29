@@ -200,6 +200,16 @@ function markLocalDirty({ saveId, storage, storageKey }) {
   return true;
 }
 
+function preserveLocalOnlyState({ state, saveId, storage, storageKey }) {
+  try {
+    writeLocalState({ state, storage, storageKey });
+    return markLocalDirty({ saveId, storage, storageKey });
+  } catch (error) {
+    console.warn('Local cache recovery failed after cloud save failure.', error);
+    return false;
+  }
+}
+
 function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, storageKey }) {
   try {
     const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
@@ -390,7 +400,8 @@ async function saveCloudState({
     }
     return localWriteSucceeded ? CLOUD_SYNCED : CLOUD_ONLY;
   } catch (error) {
-    if (localWriteSucceeded && localDirtyMetadataSucceeded) {
+    if (localWriteSucceeded && localDirtyMetadataSucceeded
+      && preserveLocalOnlyState({ state, saveId: localSaveId, storage, storageKey })) {
       console.warn('Cloud state save failed; local cache is preserved.', error);
       return LOCAL_ONLY;
     }

@@ -1214,6 +1214,96 @@ test('cloud-only success from one tab does not clear another tab dirty marker', 
   }
 });
 
+test('cloud conflict from one tab re-preserves its snapshot after another tab syncs', async () => {
+  const tabA = await freshPersistenceModule('tab-a-conflict-after-tab-b');
+  const tabB = await freshPersistenceModule('tab-b-sync-before-tab-a-conflict');
+  const storage = memoryStorage({
+    'study-state': JSON.stringify({ ...savedState, startedAt: '2026-04-28' }),
+  });
+  const baseCloudState = { ...savedState, startedAt: '2026-04-28' };
+  const tabACloudSave = deferred();
+  const tabAState = { ...savedState, startedAt: '2026-04-29' };
+  const tabBState = { ...savedState, startedAt: '2026-04-30' };
+  const loadVersion7 = async () => ({
+    ok: true,
+    json: async () => ({ state: baseCloudState, updatedAt: '2026-04-28T00:00:00.000Z', version: 7 }),
+  });
+  const fetchA = async (url, options) => {
+    if (options?.method === 'PUT') return tabACloudSave.promise;
+    return {
+      ok: true,
+      json: async () => ({ state: tabBState, updatedAt: '2026-04-30T00:00:00.000Z', version: 8 }),
+    };
+  };
+  const fetchB = async (url, options) => {
+    if (options?.method === 'PUT') {
+      return {
+        ok: true,
+        json: async () => ({ state: tabBState, updatedAt: '2026-04-30T00:00:00.000Z', version: 8 }),
+      };
+    }
+    throw new Error(`unexpected tab B request: ${url}`);
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    await tabA.loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson: loadVersion7,
+    });
+    await tabB.loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson: loadVersion7,
+    });
+    const tabASavePromise = tabA.saveStateEverywhere({
+      state: tabAState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson: fetchA,
+    });
+    const tabBStatus = await tabB.saveStateEverywhere({
+      state: tabBState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson: fetchB,
+    });
+
+    tabACloudSave.resolve({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Study state conflict' }),
+    });
+    const tabAStatus = await tabASavePromise;
+    const loaded = await tabA.loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson: fetchA,
+    });
+    const metadataAfterTabAConflict = JSON.parse(storage.dump()['study-state:sync-metadata']);
+
+    assert.equal(tabBStatus, tabB.CLOUD_SYNCED);
+    assert.equal(tabAStatus, tabA.LOCAL_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), tabAState);
+    assert.deepEqual(loaded.state, tabAState);
+    assert.equal(loaded.syncStatus, tabA.LOCAL_ONLY);
+    assert.equal(metadataAfterTabAConflict.dirty, true);
+    assert.equal(metadataAfterTabAConflict.cloudVersion, 7);
+  } finally {
+    tabACloudSave.resolve({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Study state conflict' }),
+    });
+    console.warn = originalWarn;
+  }
+});
+
 test('older cloud success after local write failure does not clear a newer dirty local save marker', async () => {
   const backingStorage = memoryStorage();
   let failNextStateWrite = true;
