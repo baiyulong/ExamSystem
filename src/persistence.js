@@ -16,7 +16,8 @@ const cloudVersionsByStorage = new WeakMap();
 
 function nextLocalSaveId() {
   localSaveSequence += 1;
-  return `${Date.now()}-${localSaveSequence}`;
+  const uniqueSuffix = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
+  return `${Date.now()}-${localSaveSequence}-${uniqueSuffix}`;
 }
 
 function readLocalState({ storage, storageKey, createInitialState }) {
@@ -111,6 +112,12 @@ function markLocalDirty({ saveId, storage, storageKey }) {
 function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, storageKey }) {
   try {
     const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
+    if (expectedSaveId && currentMetadata.dirty && currentMetadata.saveId !== expectedSaveId) {
+      const dirtySaveBelongsToThisContext = latestLocalSaveAttemptId === currentMetadata.saveId;
+      if (rememberCloudVersion && !dirtySaveBelongsToThisContext) {
+        return true;
+      }
+    }
     if (expectedSaveId && latestLocalSaveAttemptId && latestLocalSaveAttemptId !== expectedSaveId) {
       if (currentMetadata.dirty) {
         const knownCloudVersion = getKnownCloudVersion({ storage, storageKey });

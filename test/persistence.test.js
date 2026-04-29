@@ -11,6 +11,10 @@ import {
   saveStateEverywhere,
 } from '../src/persistence.js';
 
+async function freshPersistenceModule(name) {
+  return import(`../src/persistence.js?test=${name}-${Date.now()}-${Math.random()}`);
+}
+
 const savedState = {
   cards: [],
   plan: [],
@@ -975,6 +979,88 @@ test('older queued cloud success does not clear a newer dirty local save marker'
       ok: true,
       json: async () => ({ state: newerState, updatedAt: '2026-04-28T00:00:00.000Z' }),
     });
+  }
+});
+
+test('cloud success from one tab does not clear another tab dirty marker', async () => {
+  const tabA = await freshPersistenceModule('tab-a');
+  const tabB = await freshPersistenceModule('tab-b');
+  const storage = memoryStorage({
+    'study-state': JSON.stringify({ ...savedState, startedAt: '2026-04-28' }),
+  });
+  const baseCloudState = { ...savedState, startedAt: '2026-04-28' };
+  const tabACloudSave = deferred();
+  const tabAState = { ...savedState, startedAt: '2026-04-29' };
+  const tabBState = { ...savedState, startedAt: '2026-04-30' };
+  const loadVersion7 = async () => ({
+    ok: true,
+    json: async () => ({ state: baseCloudState, updatedAt: '2026-04-28T00:00:00.000Z', version: 7 }),
+  });
+  const fetchA = async (url, options) => {
+    if (options?.method === 'PUT') return tabACloudSave.promise;
+    throw new Error(`unexpected tab A request: ${url}`);
+  };
+  const fetchB = async (url, options) => {
+    if (options?.method === 'PUT') {
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'Study state conflict' }),
+      };
+    }
+    throw new Error(`unexpected tab B request: ${url}`);
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    await tabA.loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson: loadVersion7,
+    });
+    await tabB.loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson: loadVersion7,
+    });
+    const tabASavePromise = tabA.saveStateEverywhere({
+      state: tabAState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson: fetchA,
+    });
+    const tabBStatus = await tabB.saveStateEverywhere({
+      state: tabBState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson: fetchB,
+    });
+    const metadataAfterTabB = JSON.parse(storage.dump()['study-state:sync-metadata']);
+
+    tabACloudSave.resolve({
+      ok: true,
+      json: async () => ({ state: tabAState, updatedAt: '2026-04-29T00:00:00.000Z', version: 8 }),
+    });
+    const tabAStatus = await tabASavePromise;
+    const metadataAfterTabA = JSON.parse(storage.dump()['study-state:sync-metadata']);
+
+    assert.equal(tabBStatus, tabB.LOCAL_ONLY);
+    assert.equal(metadataAfterTabB.dirty, true);
+    assert.equal(metadataAfterTabB.cloudVersion, 7);
+    assert.equal(tabAStatus, tabA.CLOUD_SYNCED);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), tabBState);
+    assert.equal(metadataAfterTabA.dirty, true);
+    assert.equal(metadataAfterTabA.saveId, metadataAfterTabB.saveId);
+    assert.equal(metadataAfterTabA.cloudVersion, 7);
+  } finally {
+    tabACloudSave.resolve({
+      ok: true,
+      json: async () => ({ state: tabAState, updatedAt: '2026-04-29T00:00:00.000Z', version: 8 }),
+    });
+    console.warn = originalWarn;
   }
 });
 
