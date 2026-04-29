@@ -82,7 +82,10 @@ function readLocalSyncMetadata({ storage, storageKey }) {
       cloudVersionKnown: hasCloudVersion && (Number.isInteger(cloudVersion) || cloudVersion === null),
       cloudVersion,
     };
-    if (!parsedMetadata.dirty && fallbackMetadata?.dirty) return fallbackMetadata;
+    if (fallbackMetadata?.dirty
+      && (!parsedMetadata.dirty || parsedMetadata.saveId !== fallbackMetadata.saveId)) {
+      return fallbackMetadata;
+    }
     return parsedMetadata;
   } catch (error) {
     console.warn('Local sync metadata is invalid; treating local cache as local-only.', error);
@@ -202,6 +205,10 @@ function markLocalDirty({ saveId, storage, storageKey }) {
 
 function preserveLocalOnlyState({ state, saveId, storage, storageKey }) {
   try {
+    const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
+    if (currentMetadata.dirty && currentMetadata.saveId !== saveId) {
+      return false;
+    }
     writeLocalState({ state, storage, storageKey });
     return markLocalDirty({ saveId, storage, storageKey });
   } catch (error) {

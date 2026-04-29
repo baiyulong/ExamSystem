@@ -696,13 +696,64 @@ test('saveStateEverywhere continues queued saves after a failed cloud save', asy
       status: 503,
       json: async () => ({ error: 'offline' }),
     });
-    assert.equal(await failedSavePromise, LOCAL_ONLY);
+    assert.equal(await failedSavePromise, SAVE_FAILED);
     assert.equal(await recoveredSavePromise, CLOUD_SYNCED);
     assert.deepEqual(cloudWrites, ['2026-04-27', '2026-04-28']);
   } finally {
     firstSave.resolve({
       ok: true,
       json: async () => ({ state: failedState, updatedAt: '2026-04-27T00:00:00.000Z' }),
+    });
+    console.warn = originalWarn;
+  }
+});
+
+test('older failed queued save does not overwrite newer dirty local state', async () => {
+  const storage = memoryStorage();
+  const firstSave = deferred();
+  const olderState = { ...savedState, startedAt: '2026-04-27' };
+  const newerState = { ...savedState, startedAt: '2026-04-28' };
+  const fetchJson = async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.state.startedAt === olderState.startedAt) return firstSave.promise;
+    return {
+      ok: true,
+      json: async () => ({ state: newerState, updatedAt: '2026-04-28T00:00:00.000Z', version: 8 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const olderSavePromise = saveStateEverywhere({
+      state: olderState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    const newerSavePromise = saveStateEverywhere({
+      state: newerState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    await Promise.resolve();
+    firstSave.resolve({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Study state conflict' }),
+    });
+
+    assert.equal(await olderSavePromise, SAVE_FAILED);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), newerState);
+    assert.equal(JSON.parse(storage.dump()['study-state:sync-metadata']).dirty, true);
+    assert.equal(await newerSavePromise, CLOUD_SYNCED);
+  } finally {
+    firstSave.resolve({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Study state conflict' }),
     });
     console.warn = originalWarn;
   }
