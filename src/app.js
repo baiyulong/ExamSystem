@@ -5,6 +5,7 @@ import {
   CLOUD_SYNCED,
   LOCAL_ONLY,
   SAVE_FAILED,
+  loadLocalState,
   loadInitialState,
   saveStateEverywhere,
 } from './persistence.js';
@@ -31,7 +32,10 @@ function initialState() {
   };
 }
 
-let state = initialState();
+let state = loadLocalState({
+  storageKey: STORAGE_KEY,
+  createInitialState: initialState,
+});
 let syncStatus = LOCAL_ONLY;
 const startupLoad = createStartupLoadController();
 
