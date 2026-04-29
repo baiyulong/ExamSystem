@@ -10,14 +10,21 @@ function localSyncMetadataKey(storageKey) {
   return `${storageKey}:sync-metadata`;
 }
 
+function localDirtyFallbackKey(storageKey) {
+  return `${storageKey}:dirty-fallback`;
+}
+
 let localSaveSequence = 0;
 let latestLocalSaveAttemptId = null;
+const localSaveIds = new Set();
 const cloudVersionsByStorage = new WeakMap();
 
 function nextLocalSaveId() {
   localSaveSequence += 1;
   const uniqueSuffix = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
-  return `${Date.now()}-${localSaveSequence}-${uniqueSuffix}`;
+  const saveId = `${Date.now()}-${localSaveSequence}-${uniqueSuffix}`;
+  localSaveIds.add(saveId);
+  return saveId;
 }
 
 function readLocalState({ storage, storageKey, createInitialState }) {
@@ -42,7 +49,20 @@ function writeLocalState({ state, storage, storageKey }) {
   storage.setItem(storageKey, JSON.stringify(state));
 }
 
+function restoreLocalState({ previousState, storage, storageKey }) {
+  if (previousState == null) {
+    if (typeof storage.removeItem === 'function') {
+      storage.removeItem(storageKey);
+      return;
+    }
+    storage.setItem(storageKey, '');
+    return;
+  }
+  storage.setItem(storageKey, previousState);
+}
+
 function readLocalSyncMetadata({ storage, storageKey }) {
+  const fallbackMetadata = readLocalDirtyFallback({ storage, storageKey });
   let saved;
   try {
     saved = storage.getItem(localSyncMetadataKey(storageKey));
@@ -50,7 +70,35 @@ function readLocalSyncMetadata({ storage, storageKey }) {
     console.warn('Local sync metadata is invalid; treating local cache as local-only.', error);
     return { dirty: true, unreadable: true };
   }
-  if (!saved) return { dirty: false };
+  if (!saved) return fallbackMetadata ?? { dirty: false };
+
+  try {
+    const metadata = JSON.parse(saved);
+    const hasCloudVersion = Object.hasOwn(metadata ?? {}, 'cloudVersion');
+    const cloudVersion = metadata?.cloudVersion;
+    const parsedMetadata = {
+      dirty: metadata?.dirty === true,
+      saveId: typeof metadata?.saveId === 'string' ? metadata.saveId : undefined,
+      cloudVersionKnown: hasCloudVersion && (Number.isInteger(cloudVersion) || cloudVersion === null),
+      cloudVersion,
+    };
+    if (!parsedMetadata.dirty && fallbackMetadata?.dirty) return fallbackMetadata;
+    return parsedMetadata;
+  } catch (error) {
+    console.warn('Local sync metadata is invalid; treating local cache as local-only.', error);
+    return { dirty: true, unreadable: true };
+  }
+}
+
+function readLocalDirtyFallback({ storage, storageKey }) {
+  let saved;
+  try {
+    saved = storage.getItem(localDirtyFallbackKey(storageKey));
+  } catch (error) {
+    console.warn('Local sync fallback metadata is invalid; treating local cache as local-only.', error);
+    return { dirty: true, unreadable: true };
+  }
+  if (!saved) return null;
 
   try {
     const metadata = JSON.parse(saved);
@@ -63,7 +111,7 @@ function readLocalSyncMetadata({ storage, storageKey }) {
       cloudVersion,
     };
   } catch (error) {
-    console.warn('Local sync metadata is invalid; treating local cache as local-only.', error);
+    console.warn('Local sync fallback metadata is invalid; treating local cache as local-only.', error);
     return { dirty: true, unreadable: true };
   }
 }
@@ -87,6 +135,32 @@ function writeLocalSyncMetadata({
   storage.setItem(localSyncMetadataKey(storageKey), JSON.stringify(metadata));
 }
 
+function writeLocalDirtyFallback({
+  saveId,
+  cloudVersion,
+  cloudVersionKnown = false,
+  storage,
+  storageKey,
+}) {
+  const metadata = {
+    dirty: true,
+    saveId,
+    updatedAt: new Date().toISOString(),
+  };
+  if (cloudVersionKnown) {
+    metadata.cloudVersion = cloudVersion;
+  }
+  storage.setItem(localDirtyFallbackKey(storageKey), JSON.stringify(metadata));
+}
+
+function clearLocalDirtyFallback({ storage, storageKey }) {
+  if (typeof storage.removeItem === 'function') {
+    storage.removeItem(localDirtyFallbackKey(storageKey));
+    return;
+  }
+  storage.setItem(localDirtyFallbackKey(storageKey), '');
+}
+
 function markLocalDirty({ saveId, storage, storageKey }) {
   try {
     const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
@@ -104,6 +178,23 @@ function markLocalDirty({ saveId, storage, storageKey }) {
     });
   } catch (error) {
     console.warn('Local sync metadata update failed.', error);
+    try {
+      const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
+      const knownCloudVersion = getKnownCloudVersion({ storage, storageKey });
+      const preserveDirtyBaseVersion = currentMetadata.dirty && currentMetadata.cloudVersionKnown;
+      writeLocalDirtyFallback({
+        saveId,
+        cloudVersion: preserveDirtyBaseVersion || !knownCloudVersion.known
+          ? currentMetadata.cloudVersion
+          : knownCloudVersion.version,
+        cloudVersionKnown: preserveDirtyBaseVersion || knownCloudVersion.known || currentMetadata.cloudVersionKnown,
+        storage,
+        storageKey,
+      });
+      return true;
+    } catch (fallbackError) {
+      console.warn('Local sync fallback metadata update failed.', fallbackError);
+    }
     return false;
   }
   return true;
@@ -113,8 +204,8 @@ function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, 
   try {
     const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
     if (expectedSaveId && currentMetadata.dirty && currentMetadata.saveId !== expectedSaveId) {
-      const dirtySaveBelongsToThisContext = latestLocalSaveAttemptId === currentMetadata.saveId;
-      if (rememberCloudVersion && !dirtySaveBelongsToThisContext) {
+      const dirtySaveBelongsToThisContext = localSaveIds.has(currentMetadata.saveId);
+      if (!dirtySaveBelongsToThisContext) {
         return true;
       }
     }
@@ -145,6 +236,7 @@ function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, 
       storage,
       storageKey,
     });
+    clearLocalDirtyFallback({ storage, storageKey });
   } catch (error) {
     console.warn('Local sync metadata update failed.', error);
     return false;
@@ -320,9 +412,15 @@ export async function saveStateEverywhere({
   let localDirtyMetadataSucceeded = false;
   const localSaveId = nextLocalSaveId();
   latestLocalSaveAttemptId = localSaveId;
+  let previousLocalState = null;
   try {
+    previousLocalState = storage.getItem(storageKey);
     writeLocalState({ state: validState, storage, storageKey });
     localDirtyMetadataSucceeded = markLocalDirty({ saveId: localSaveId, storage, storageKey });
+    if (!localDirtyMetadataSucceeded) {
+      restoreLocalState({ previousState: previousLocalState, storage, storageKey });
+      localWriteSucceeded = false;
+    }
   } catch (error) {
     localWriteSucceeded = false;
     console.warn('Local cache write failed before cloud save.', error);

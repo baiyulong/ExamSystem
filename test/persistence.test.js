@@ -27,6 +27,7 @@ function memoryStorage(initial = {}) {
   return {
     getItem: (key) => store.get(key) ?? null,
     setItem: (key, value) => store.set(key, value),
+    removeItem: (key) => store.delete(key),
     dump: () => Object.fromEntries(store.entries()),
   };
 }
@@ -72,9 +73,12 @@ test('loadInitialState renders local cache first and then replaces it with cloud
   assert.equal(result.syncStatus, CLOUD_SYNCED);
   assert.deepEqual(events, [
     'getItem:study-state',
+    'getItem:study-state:dirty-fallback',
     'getItem:study-state:sync-metadata',
     'fetch:/api/state',
+    'getItem:study-state:dirty-fallback',
     'getItem:study-state:sync-metadata',
+    'getItem:study-state:dirty-fallback',
     'getItem:study-state:sync-metadata',
   ]);
 });
@@ -759,7 +763,7 @@ test('saveStateEverywhere reports save failure when dirty metadata cannot persis
   const storage = {
     getItem: backingStorage.getItem,
     setItem: (key, value) => {
-      if (key === 'study-state:sync-metadata') {
+      if (key === 'study-state:sync-metadata' || key === 'study-state:dirty-fallback') {
         throw new Error('QuotaExceededError');
       }
       backingStorage.setItem(key, value);
@@ -782,8 +786,61 @@ test('saveStateEverywhere reports save failure when dirty metadata cannot persis
       fetchJson,
     });
 
-    assert.equal(JSON.parse(storage.dump()['study-state']).startedAt, '2026-04-28');
+    assert.equal(storage.dump()['study-state'], '');
     assert.equal(status, SAVE_FAILED);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('loadInitialState preserves local cache when dirty metadata write failed before cloud failure', async () => {
+  const backingStorage = memoryStorage();
+  const localNewerState = { ...savedState, startedAt: '2026-04-29' };
+  const staleCloudState = { ...savedState, startedAt: '2026-04-27' };
+  const storage = {
+    getItem: backingStorage.getItem,
+    setItem: (key, value) => {
+      if (key === 'study-state:sync-metadata') {
+        throw new Error('QuotaExceededError');
+      }
+      backingStorage.setItem(key, value);
+    },
+    dump: backingStorage.dump,
+  };
+  const fetchJson = async (url, options) => {
+    if (options?.method === 'PUT') {
+      return {
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'Database unavailable' }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ state: staleCloudState, updatedAt: '2026-04-27T00:00:00.000Z', version: 7 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const saveStatus = await saveStateEverywhere({
+      state: localNewerState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    const loaded = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson,
+    });
+
+    assert.equal(saveStatus, LOCAL_ONLY);
+    assert.deepEqual(loaded.state, localNewerState);
+    assert.equal(loaded.syncStatus, LOCAL_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), localNewerState);
   } finally {
     console.warn = originalWarn;
   }
@@ -1064,6 +1121,99 @@ test('cloud success from one tab does not clear another tab dirty marker', async
   }
 });
 
+test('cloud-only success from one tab does not clear another tab dirty marker', async () => {
+  const tabA = await freshPersistenceModule('tab-a-cloud-only');
+  const tabB = await freshPersistenceModule('tab-b-cloud-only');
+  const backingStorage = memoryStorage({
+    'study-state': JSON.stringify({ ...savedState, startedAt: '2026-04-28' }),
+  });
+  let failTabAStateWrite = false;
+  const storage = {
+    getItem: backingStorage.getItem,
+    setItem: (key, value) => {
+      if (key === 'study-state' && failTabAStateWrite) {
+        failTabAStateWrite = false;
+        throw new Error('QuotaExceededError');
+      }
+      backingStorage.setItem(key, value);
+    },
+    dump: backingStorage.dump,
+  };
+  const baseCloudState = { ...savedState, startedAt: '2026-04-28' };
+  const tabACloudSave = deferred();
+  const tabAState = { ...savedState, startedAt: '2026-04-29' };
+  const tabBState = { ...savedState, startedAt: '2026-04-30' };
+  const loadVersion7 = async () => ({
+    ok: true,
+    json: async () => ({ state: baseCloudState, updatedAt: '2026-04-28T00:00:00.000Z', version: 7 }),
+  });
+  const fetchA = async (url, options) => {
+    if (options?.method === 'PUT') return tabACloudSave.promise;
+    throw new Error(`unexpected tab A request: ${url}`);
+  };
+  const fetchB = async (url, options) => {
+    if (options?.method === 'PUT') {
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'Study state conflict' }),
+      };
+    }
+    throw new Error(`unexpected tab B request: ${url}`);
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    await tabA.loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson: loadVersion7,
+    });
+    await tabB.loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson: loadVersion7,
+    });
+    failTabAStateWrite = true;
+    const tabASavePromise = tabA.saveStateEverywhere({
+      state: tabAState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson: fetchA,
+    });
+    const tabBStatus = await tabB.saveStateEverywhere({
+      state: tabBState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson: fetchB,
+    });
+    const metadataAfterTabB = JSON.parse(storage.dump()['study-state:sync-metadata']);
+
+    tabACloudSave.resolve({
+      ok: true,
+      json: async () => ({ state: tabAState, updatedAt: '2026-04-29T00:00:00.000Z', version: 8 }),
+    });
+    const tabAStatus = await tabASavePromise;
+    const metadataAfterTabA = JSON.parse(storage.dump()['study-state:sync-metadata']);
+
+    assert.equal(tabBStatus, tabB.LOCAL_ONLY);
+    assert.equal(tabAStatus, tabA.CLOUD_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), tabBState);
+    assert.equal(metadataAfterTabA.dirty, true);
+    assert.equal(metadataAfterTabA.saveId, metadataAfterTabB.saveId);
+    assert.equal(metadataAfterTabA.cloudVersion, 7);
+  } finally {
+    tabACloudSave.resolve({
+      ok: true,
+      json: async () => ({ state: tabAState, updatedAt: '2026-04-29T00:00:00.000Z', version: 8 }),
+    });
+    console.warn = originalWarn;
+  }
+});
+
 test('older cloud success after local write failure does not clear a newer dirty local save marker', async () => {
   const backingStorage = memoryStorage();
   let failNextStateWrite = true;
@@ -1227,7 +1377,7 @@ test('older cloud success does not clear dirty marker after newer metadata write
       status: 503,
       json: async () => ({ error: 'offline' }),
     });
-    assert.equal(await newerSavePromise, SAVE_FAILED);
+    assert.equal(await newerSavePromise, LOCAL_ONLY);
 
     const loaded = await loadInitialState({
       storage,
