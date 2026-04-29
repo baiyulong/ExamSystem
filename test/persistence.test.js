@@ -281,6 +281,85 @@ test('loadInitialState falls back to local cache when cloud state is schema inva
   }
 });
 
+test('loadInitialState treats malformed sync metadata with valid local state as local-only', async () => {
+  const localState = { ...savedState, startedAt: '2026-04-29' };
+  const staleCloudState = { ...savedState, startedAt: '2026-04-27' };
+  const storage = memoryStorage({
+    'study-state': JSON.stringify(localState),
+    'study-state:sync-metadata': '{not valid json',
+  });
+  let fetchCalled = false;
+  const fetchJson = async () => {
+    fetchCalled = true;
+    return {
+      ok: true,
+      json: async () => ({ state: staleCloudState, updatedAt: '2026-04-27T00:00:00.000Z', version: 1 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const result = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    assert.equal(fetchCalled, false);
+    assert.deepEqual(result.state, localState);
+    assert.equal(result.syncStatus, LOCAL_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), localState);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('loadInitialState treats unreadable sync metadata with valid local state as local-only', async () => {
+  const localState = { ...savedState, startedAt: '2026-04-29' };
+  const staleCloudState = { ...savedState, startedAt: '2026-04-27' };
+  const backingStorage = memoryStorage({
+    'study-state': JSON.stringify(localState),
+  });
+  const storage = {
+    getItem: (key) => {
+      if (key === 'study-state:sync-metadata') {
+        throw new Error('SecurityError');
+      }
+      return backingStorage.getItem(key);
+    },
+    setItem: backingStorage.setItem,
+    dump: backingStorage.dump,
+  };
+  let fetchCalled = false;
+  const fetchJson = async () => {
+    fetchCalled = true;
+    return {
+      ok: true,
+      json: async () => ({ state: staleCloudState, updatedAt: '2026-04-27T00:00:00.000Z', version: 1 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const result = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    assert.equal(fetchCalled, false);
+    assert.deepEqual(result.state, localState);
+    assert.equal(result.syncStatus, LOCAL_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), localState);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere writes local cache before saving to the backend', async () => {
   const events = [];
   const storage = memoryStorage();
@@ -383,6 +462,82 @@ test('saveStateEverywhere sends queued saves in mutation order even when the fir
     secondSave.resolve({
       ok: true,
       json: async () => ({ state: newerState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+    });
+  }
+});
+
+test('saveStateEverywhere advances expectedVersion between queued same-tab saves', async () => {
+  const storage = memoryStorage();
+  const firstSave = deferred();
+  const secondSave = deferred();
+  const cloudWrites = [];
+  const firstState = { ...savedState, startedAt: '2026-04-29' };
+  const secondState = { ...savedState, startedAt: '2026-04-30' };
+  const fetchJson = async (url, options) => {
+    if (options?.method === 'PUT') {
+      const body = JSON.parse(options.body);
+      cloudWrites.push({ expectedVersion: body.expectedVersion, startedAt: body.state.startedAt });
+      if (cloudWrites.length === 1) return firstSave.promise;
+      if (cloudWrites.length === 2) return secondSave.promise;
+      throw new Error('unexpected extra cloud save');
+    }
+    return {
+      ok: true,
+      json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z', version: 7 }),
+    };
+  };
+
+  try {
+    await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+
+    const firstSavePromise = saveStateEverywhere({
+      state: firstState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    const secondSavePromise = saveStateEverywhere({
+      state: secondState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    await Promise.resolve();
+    assert.deepEqual(cloudWrites, [{ expectedVersion: 7, startedAt: '2026-04-29' }]);
+
+    firstSave.resolve({
+      ok: true,
+      json: async () => ({ state: firstState, updatedAt: '2026-04-29T00:00:00.000Z', version: 8 }),
+    });
+    assert.equal(await firstSavePromise, CLOUD_SYNCED);
+    await Promise.resolve();
+
+    assert.deepEqual(cloudWrites, [
+      { expectedVersion: 7, startedAt: '2026-04-29' },
+      { expectedVersion: 8, startedAt: '2026-04-30' },
+    ]);
+
+    secondSave.resolve({
+      ok: true,
+      json: async () => ({ state: secondState, updatedAt: '2026-04-30T00:00:00.000Z', version: 9 }),
+    });
+    assert.equal(await secondSavePromise, CLOUD_SYNCED);
+    assert.equal(JSON.parse(storage.dump()['study-state:sync-metadata']).dirty, false);
+    assert.equal(JSON.parse(storage.dump()['study-state:sync-metadata']).cloudVersion, 9);
+  } finally {
+    firstSave.resolve({
+      ok: true,
+      json: async () => ({ state: firstState, updatedAt: '2026-04-29T00:00:00.000Z', version: 8 }),
+    });
+    secondSave.resolve({
+      ok: true,
+      json: async () => ({ state: secondState, updatedAt: '2026-04-30T00:00:00.000Z', version: 9 }),
     });
   }
 });
@@ -807,6 +962,104 @@ test('older cloud success after local write failure does not clear a newer dirty
   }
 });
 
+test('older cloud success does not clear dirty marker after newer metadata write failure', async () => {
+  const backingStorage = memoryStorage();
+  let metadataWrites = 0;
+  const storage = {
+    getItem: backingStorage.getItem,
+    setItem: (key, value) => {
+      if (key === 'study-state:sync-metadata') {
+        metadataWrites += 1;
+        if (metadataWrites === 2) {
+          throw new Error('QuotaExceededError');
+        }
+      }
+      backingStorage.setItem(key, value);
+    },
+    dump: backingStorage.dump,
+  };
+  const firstSave = deferred();
+  const secondSave = deferred();
+  const olderState = { ...savedState, startedAt: '2026-04-27' };
+  const newerState = {
+    ...savedState,
+    wrongItems: [
+      {
+        id: 'manual-1',
+        title: '手动错题',
+        reason: '元数据写入失败后的本地进度',
+        createdAt: '2026-04-29',
+      },
+    ],
+  };
+  const staleCloudState = { ...savedState, startedAt: '2026-04-26' };
+  const cloudWrites = [];
+  const fetchJson = async (url, options) => {
+    if (url === '/api/state' && options?.method === 'PUT') {
+      cloudWrites.push(JSON.parse(options.body).state);
+      if (cloudWrites.length === 1) return firstSave.promise;
+      if (cloudWrites.length === 2) return secondSave.promise;
+      throw new Error('unexpected extra cloud save');
+    }
+    return {
+      ok: true,
+      json: async () => ({ state: staleCloudState, updatedAt: '2026-04-26T00:00:00.000Z', version: 1 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const olderSavePromise = saveStateEverywhere({
+      state: olderState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    const newerSavePromise = saveStateEverywhere({
+      state: newerState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    await Promise.resolve();
+    firstSave.resolve({
+      ok: true,
+      json: async () => ({ state: olderState, updatedAt: '2026-04-27T00:00:00.000Z', version: 2 }),
+    });
+    assert.equal(await olderSavePromise, CLOUD_SYNCED);
+
+    secondSave.resolve({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: 'offline' }),
+    });
+    assert.equal(await newerSavePromise, SAVE_FAILED);
+
+    const loaded = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-25' }),
+      fetchJson,
+    });
+
+    assert.deepEqual(loaded.state, newerState);
+    assert.equal(loaded.syncStatus, LOCAL_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), newerState);
+  } finally {
+    firstSave.resolve({
+      ok: true,
+      json: async () => ({ state: olderState, updatedAt: '2026-04-27T00:00:00.000Z', version: 2 }),
+    });
+    secondSave.resolve({
+      ok: true,
+      json: async () => ({ state: newerState, updatedAt: '2026-04-29T00:00:00.000Z', version: 3 }),
+    });
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere reports cloud-only when local cache write fails', async () => {
   const warnings = [];
   const storage = {
@@ -913,6 +1166,239 @@ test('saveStateEverywhere warns with status when backend returns non-JSON error'
     assert.equal(status, LOCAL_ONLY);
     assert.match(String(warnings[0]), /503/);
   } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('saveStateEverywhere sends latest loaded cloud version and preserves local cache on conflict', async () => {
+  const storage = memoryStorage({
+    'study-state': JSON.stringify({ ...savedState, startedAt: '2026-04-27' }),
+  });
+  const loadedCloudState = { ...savedState, startedAt: '2026-04-28' };
+  const localConflictState = { ...savedState, startedAt: '2026-04-29' };
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    if (options?.method === 'PUT') {
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'Study state conflict' }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ state: loadedCloudState, updatedAt: '2026-04-28T00:00:00.000Z', version: 7 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const loaded = await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+    const status = await saveStateEverywhere({
+      state: localConflictState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    const putBody = JSON.parse(calls.find((call) => call.options?.method === 'PUT').options.body);
+    assert.equal(loaded.syncStatus, CLOUD_SYNCED);
+    assert.equal(putBody.expectedVersion, 7);
+    assert.equal(status, LOCAL_ONLY);
+    assert.deepEqual(JSON.parse(storage.dump()['study-state']), localConflictState);
+    assert.equal(JSON.parse(storage.dump()['study-state:sync-metadata']).dirty, true);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('saveStateEverywhere sends expectedVersion 0 after loading an empty cloud row', async () => {
+  const storage = memoryStorage();
+  const calls = [];
+  const fetchJson = async (url, options) => {
+    calls.push({ url, options });
+    if (options?.method === 'PUT') {
+      return {
+        ok: true,
+        json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z', version: 1 }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ state: null, updatedAt: null, version: null }),
+    };
+  };
+
+  const loaded = await loadInitialState({
+    storage,
+    storageKey: 'study-state',
+    createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+    fetchJson,
+  });
+  const status = await saveStateEverywhere({
+    state: savedState,
+    storage,
+    storageKey: 'study-state',
+    fetchJson,
+  });
+
+  const putBody = JSON.parse(calls.find((call) => call.options?.method === 'PUT').options.body);
+  assert.equal(loaded.syncStatus, LOCAL_ONLY);
+  assert.equal(putBody.expectedVersion, 0);
+  assert.equal(status, CLOUD_SYNCED);
+});
+
+test('saveStateEverywhere preserves expectedVersion for dirty conflict retry after reload', async () => {
+  const storage = memoryStorage();
+  const loadedCloudState = { ...savedState, startedAt: '2026-04-28' };
+  const localConflictState = { ...savedState, startedAt: '2026-04-29' };
+  const retryState = { ...savedState, startedAt: '2026-04-30' };
+  const initialCalls = [];
+  const initialFetchJson = async (url, options) => {
+    initialCalls.push({ url, options });
+    if (options?.method === 'PUT') {
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'Study state conflict' }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ state: loadedCloudState, updatedAt: '2026-04-28T00:00:00.000Z', version: 7 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    await loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson: initialFetchJson,
+    });
+    assert.equal(await saveStateEverywhere({
+      state: localConflictState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson: initialFetchJson,
+    }), LOCAL_ONLY);
+
+    const reloadedStorage = memoryStorage(storage.dump());
+    const retryCalls = [];
+    const retryFetchJson = async (url, options) => {
+      retryCalls.push({ url, options });
+      if (options?.method === 'PUT') {
+        return {
+          ok: true,
+          json: async () => ({ state: retryState, updatedAt: '2026-04-30T00:00:00.000Z', version: 8 }),
+        };
+      }
+      throw new Error('dirty local state should skip cloud load after reload');
+    };
+
+    const loadedAfterReload = await loadInitialState({
+      storage: reloadedStorage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson: retryFetchJson,
+    });
+    const retryStatus = await saveStateEverywhere({
+      state: retryState,
+      storage: reloadedStorage,
+      storageKey: 'study-state',
+      fetchJson: retryFetchJson,
+    });
+
+    const retryPutBody = JSON.parse(retryCalls.find((call) => call.options?.method === 'PUT').options.body);
+    assert.deepEqual(loadedAfterReload.state, localConflictState);
+    assert.equal(loadedAfterReload.syncStatus, LOCAL_ONLY);
+    assert.equal(retryPutBody.expectedVersion, 7);
+    assert.equal(retryStatus, CLOUD_SYNCED);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('saveStateEverywhere keeps dirty base version when in-flight cloud load returns newer version', async () => {
+  const storage = memoryStorage({
+    'study-state': JSON.stringify({ ...savedState, startedAt: '2026-04-27' }),
+    'study-state:sync-metadata': JSON.stringify({
+      dirty: false,
+      saveId: 'synced-save',
+      cloudVersion: 7,
+      updatedAt: '2026-04-27T00:00:00.000Z',
+    }),
+  });
+  const cloudGet = deferred();
+  const localDirtyState = { ...savedState, startedAt: '2026-04-29' };
+  const retryState = { ...savedState, startedAt: '2026-04-30' };
+  const putBodies = [];
+  const fetchJson = async (url, options) => {
+    if (options?.method === 'PUT') {
+      putBodies.push(JSON.parse(options.body));
+      if (putBodies.length === 1) {
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ error: 'Study state conflict' }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ state: retryState, updatedAt: '2026-04-30T00:00:00.000Z', version: 8 }),
+      };
+    }
+    return cloudGet.promise;
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const loadPromise = loadInitialState({
+      storage,
+      storageKey: 'study-state',
+      createInitialState: () => ({ ...savedState, startedAt: '2026-04-26' }),
+      fetchJson,
+    });
+    await Promise.resolve();
+    assert.equal(await saveStateEverywhere({
+      state: localDirtyState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    }), LOCAL_ONLY);
+
+    cloudGet.resolve({
+      ok: true,
+      json: async () => ({ state: { ...savedState, startedAt: '2026-04-28' }, updatedAt: '2026-04-28T00:00:00.000Z', version: 8 }),
+    });
+    const loaded = await loadPromise;
+    assert.deepEqual(loaded.state, localDirtyState);
+    assert.equal(loaded.syncStatus, LOCAL_ONLY);
+
+    assert.equal(await saveStateEverywhere({
+      state: retryState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    }), CLOUD_SYNCED);
+
+    assert.equal(putBodies[0].expectedVersion, 7);
+    assert.equal(putBodies[1].expectedVersion, 7);
+  } finally {
+    cloudGet.resolve({
+      ok: true,
+      json: async () => ({ state: savedState, updatedAt: '2026-04-28T00:00:00.000Z', version: 8 }),
+    });
     console.warn = originalWarn;
   }
 });

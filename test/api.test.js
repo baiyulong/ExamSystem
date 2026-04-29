@@ -240,7 +240,7 @@ test('non-API routes return false without writing a response', async () => {
 
 test('GET /api/state returns the saved state', async () => {
   const app = await startApiServer({
-    loadState: async () => ({ state: validState, updatedAt: '2026-04-28T00:00:00.000Z' }),
+    loadState: async () => ({ state: validState, updatedAt: '2026-04-28T00:00:00.000Z', version: 4 }),
     saveState: async () => {},
     health: async () => ({ configured: true, reachable: true }),
   });
@@ -252,6 +252,7 @@ test('GET /api/state returns the saved state', async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(payload.state, validState);
     assert.equal(payload.updatedAt, '2026-04-28T00:00:00.000Z');
+    assert.equal(payload.version, 4);
   } finally {
     await app.close();
   }
@@ -259,11 +260,13 @@ test('GET /api/state returns the saved state', async () => {
 
 test('PUT /api/state validates and saves study state', async () => {
   let saved = null;
+  let expectedVersion = null;
   const app = await startApiServer({
     loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async (state) => {
+    saveState: async (state, options) => {
       saved = state;
-      return { state, updatedAt: '2026-04-28T00:00:00.000Z' };
+      expectedVersion = options.expectedVersion;
+      return { state, updatedAt: '2026-04-28T00:00:00.000Z', version: 1 };
     },
     health: async () => ({ configured: true, reachable: true }),
   });
@@ -272,13 +275,41 @@ test('PUT /api/state validates and saves study state', async () => {
     const response = await fetch(`${app.baseUrl}/api/state`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: validState }),
+      body: JSON.stringify({ state: validState, expectedVersion: 0 }),
     });
     const payload = await response.json();
 
     assert.equal(response.status, 200);
     assert.deepEqual(saved, validState);
+    assert.equal(expectedVersion, 0);
     assert.deepEqual(payload.state, validState);
+    assert.equal(payload.version, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test('PUT /api/state returns 409 when expectedVersion is stale', async () => {
+  const conflict = new Error('Study state conflict');
+  conflict.code = 'STUDY_STATE_CONFLICT';
+  const app = await startApiServer({
+    loadState: async () => ({ state: validState, updatedAt: '2026-04-28T00:00:00.000Z', version: 3 }),
+    saveState: async () => {
+      throw conflict;
+    },
+    health: async () => ({ configured: true, reachable: true }),
+  });
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state: { ...validState, startedAt: '2026-04-29' }, expectedVersion: 3 }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(payload, { error: 'Study state conflict' });
   } finally {
     await app.close();
   }

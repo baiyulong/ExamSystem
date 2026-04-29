@@ -1,4 +1,5 @@
 import { StudyStateValidationError, validateStudyState } from '../src/stateSchema.js';
+import { STUDY_STATE_CONFLICT_CODE } from './database.js';
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -74,7 +75,12 @@ export async function routeApiRequest(request, response, { repository, logger = 
     if (request.method === 'PUT' && url.pathname === '/api/state') {
       const payload = await readJsonBody(request);
       const state = validateStudyState(payload?.state);
-      sendJson(response, 200, await repository.saveState(state));
+      const expectedVersion = payload?.expectedVersion;
+      if (expectedVersion != null && (!Number.isInteger(expectedVersion) || expectedVersion < 0)) {
+        sendJson(response, 400, { error: 'Invalid expected version' });
+        return true;
+      }
+      sendJson(response, 200, await repository.saveState(state, { expectedVersion }));
       return true;
     }
 
@@ -91,6 +97,10 @@ export async function routeApiRequest(request, response, { repository, logger = 
     }
     if (error instanceof RequestBodyTooLargeError || error instanceof InvalidJsonBodyError) {
       sendJson(response, 400, { error: error.message });
+      return true;
+    }
+    if (error.code === STUDY_STATE_CONFLICT_CODE) {
+      sendJson(response, 409, { error: 'Study state conflict' });
       return true;
     }
 
