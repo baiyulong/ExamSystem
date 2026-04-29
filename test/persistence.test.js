@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  CLOUD_CONFLICT,
   CLOUD_LOAD_FAILED,
   CLOUD_ONLY,
   CLOUD_SYNCED,
@@ -397,7 +398,7 @@ test('saveStateEverywhere uses expectedVersion 0 after malformed sync metadata a
     const putBody = JSON.parse(calls[0].options.body);
     const metadata = JSON.parse(storage.dump()['study-state:sync-metadata']);
     assert.equal(putBody.expectedVersion, 0);
-    assert.equal(status, LOCAL_ONLY);
+    assert.equal(status, CLOUD_CONFLICT);
     assert.deepEqual(JSON.parse(storage.dump()['study-state']), localState);
     assert.equal(metadata.dirty, true);
   } finally {
@@ -466,7 +467,7 @@ test('saveStateEverywhere uses expectedVersion 0 after cloud load failure and pr
     const metadata = JSON.parse(storage.dump()['study-state:sync-metadata']);
     assert.equal(loaded.syncStatus, CLOUD_LOAD_FAILED);
     assert.equal(putBody.expectedVersion, 0);
-    assert.equal(status, LOCAL_ONLY);
+    assert.equal(status, CLOUD_CONFLICT);
     assert.deepEqual(JSON.parse(storage.dump()['study-state']), localState);
     assert.equal(metadata.dirty, true);
   } finally {
@@ -555,7 +556,7 @@ test('saveStateEverywhere sends queued saves in mutation order even when the fir
       ok: true,
       json: async () => ({ state: olderState, updatedAt: '2026-04-27T00:00:00.000Z' }),
     });
-    assert.equal(await olderSavePromise, CLOUD_SYNCED);
+    assert.equal(await olderSavePromise, LOCAL_ONLY);
     await Promise.resolve();
     assert.deepEqual(
       cloudWrites.map((write) => write.startedAt),
@@ -629,7 +630,7 @@ test('saveStateEverywhere advances expectedVersion between queued same-tab saves
       ok: true,
       json: async () => ({ state: firstState, updatedAt: '2026-04-29T00:00:00.000Z', version: 8 }),
     });
-    assert.equal(await firstSavePromise, CLOUD_SYNCED);
+    assert.equal(await firstSavePromise, LOCAL_ONLY);
     await Promise.resolve();
 
     assert.deepEqual(cloudWrites, [
@@ -1065,7 +1066,7 @@ test('older queued cloud success does not clear a newer dirty local save marker'
       ok: true,
       json: async () => ({ state: olderState, updatedAt: '2026-04-27T00:00:00.000Z' }),
     });
-    assert.equal(await olderSavePromise, CLOUD_SYNCED);
+    assert.equal(await olderSavePromise, LOCAL_ONLY);
     await Promise.resolve();
 
     const loaded = await loadInitialState({
@@ -1155,14 +1156,14 @@ test('cloud success from one tab does not clear another tab dirty marker', async
     const tabAStatus = await tabASavePromise;
     const metadataAfterTabA = JSON.parse(storage.dump()['study-state:sync-metadata']);
 
-    assert.equal(tabBStatus, tabB.LOCAL_ONLY);
+    assert.equal(tabBStatus, tabB.CLOUD_CONFLICT);
     assert.equal(metadataAfterTabB.dirty, true);
-    assert.equal(metadataAfterTabB.cloudVersion, 7);
+    assert.equal(Object.hasOwn(metadataAfterTabB, 'cloudVersion'), false);
     assert.equal(tabAStatus, tabA.CLOUD_SYNCED);
     assert.deepEqual(JSON.parse(storage.dump()['study-state']), tabBState);
     assert.equal(metadataAfterTabA.dirty, true);
     assert.equal(metadataAfterTabA.saveId, metadataAfterTabB.saveId);
-    assert.equal(metadataAfterTabA.cloudVersion, 7);
+    assert.equal(Object.hasOwn(metadataAfterTabA, 'cloudVersion'), false);
   } finally {
     tabACloudSave.resolve({
       ok: true,
@@ -1250,12 +1251,12 @@ test('cloud-only success from one tab does not clear another tab dirty marker', 
     const tabAStatus = await tabASavePromise;
     const metadataAfterTabA = JSON.parse(storage.dump()['study-state:sync-metadata']);
 
-    assert.equal(tabBStatus, tabB.LOCAL_ONLY);
+    assert.equal(tabBStatus, tabB.CLOUD_CONFLICT);
     assert.equal(tabAStatus, tabA.CLOUD_ONLY);
     assert.deepEqual(JSON.parse(storage.dump()['study-state']), tabBState);
     assert.equal(metadataAfterTabA.dirty, true);
     assert.equal(metadataAfterTabA.saveId, metadataAfterTabB.saveId);
-    assert.equal(metadataAfterTabA.cloudVersion, 7);
+    assert.equal(Object.hasOwn(metadataAfterTabA, 'cloudVersion'), false);
   } finally {
     tabACloudSave.resolve({
       ok: true,
@@ -1339,12 +1340,12 @@ test('cloud conflict from one tab re-preserves its snapshot after another tab sy
     const metadataAfterTabAConflict = JSON.parse(storage.dump()['study-state:sync-metadata']);
 
     assert.equal(tabBStatus, tabB.CLOUD_SYNCED);
-    assert.equal(tabAStatus, tabA.LOCAL_ONLY);
+    assert.equal(tabAStatus, tabA.CLOUD_CONFLICT);
     assert.deepEqual(JSON.parse(storage.dump()['study-state']), tabAState);
     assert.deepEqual(loaded.state, tabAState);
-    assert.equal(loaded.syncStatus, tabA.LOCAL_ONLY);
+    assert.equal(loaded.syncStatus, tabA.CLOUD_CONFLICT);
     assert.equal(metadataAfterTabAConflict.dirty, true);
-    assert.equal(metadataAfterTabAConflict.cloudVersion, 7);
+    assert.equal(metadataAfterTabAConflict.cloudVersion, 8);
   } finally {
     tabACloudSave.resolve({
       ok: false,
@@ -1419,7 +1420,7 @@ test('older cloud success after local write failure does not clear a newer dirty
       ok: true,
       json: async () => ({ state: firstState, updatedAt: '2026-04-27T00:00:00.000Z' }),
     });
-    assert.equal(await firstSavePromise, CLOUD_ONLY);
+    assert.equal(await firstSavePromise, LOCAL_ONLY);
     await Promise.resolve();
 
     const loaded = await loadInitialState({
@@ -1511,7 +1512,7 @@ test('older cloud success does not clear dirty marker after newer metadata write
       ok: true,
       json: async () => ({ state: olderState, updatedAt: '2026-04-27T00:00:00.000Z', version: 2 }),
     });
-    assert.equal(await olderSavePromise, CLOUD_SYNCED);
+    assert.equal(await olderSavePromise, LOCAL_ONLY);
 
     secondSave.resolve({
       ok: false,
@@ -1842,7 +1843,7 @@ test('saveStateEverywhere sends latest loaded cloud version and preserves local 
     const putBody = JSON.parse(calls.find((call) => call.options?.method === 'PUT').options.body);
     assert.equal(loaded.syncStatus, CLOUD_SYNCED);
     assert.equal(putBody.expectedVersion, 7);
-    assert.equal(status, LOCAL_ONLY);
+    assert.equal(status, CLOUD_CONFLICT);
     assert.deepEqual(JSON.parse(storage.dump()['study-state']), localConflictState);
     assert.equal(JSON.parse(storage.dump()['study-state:sync-metadata']).dirty, true);
   } finally {
@@ -1886,9 +1887,10 @@ test('saveStateEverywhere sends expectedVersion 0 after loading an empty cloud r
   assert.equal(status, CLOUD_SYNCED);
 });
 
-test('saveStateEverywhere preserves expectedVersion for dirty conflict retry after reload', async () => {
+test('saveStateEverywhere refreshes expectedVersion after dirty conflict retry across reload', async () => {
   const storage = memoryStorage();
   const loadedCloudState = { ...savedState, startedAt: '2026-04-28' };
+  const newerCloudState = { ...savedState, startedAt: '2026-05-01' };
   const localConflictState = { ...savedState, startedAt: '2026-04-29' };
   const retryState = { ...savedState, startedAt: '2026-04-30' };
   const initialCalls = [];
@@ -1903,7 +1905,11 @@ test('saveStateEverywhere preserves expectedVersion for dirty conflict retry aft
     }
     return {
       ok: true,
-      json: async () => ({ state: loadedCloudState, updatedAt: '2026-04-28T00:00:00.000Z', version: 7 }),
+      json: async () => ({
+        state: initialCalls.some((call) => call.options?.method === 'PUT') ? newerCloudState : loadedCloudState,
+        updatedAt: '2026-04-28T00:00:00.000Z',
+        version: initialCalls.some((call) => call.options?.method === 'PUT') ? 8 : 7,
+      }),
     };
   };
   const originalWarn = console.warn;
@@ -1921,16 +1927,18 @@ test('saveStateEverywhere preserves expectedVersion for dirty conflict retry aft
       storage,
       storageKey: 'study-state',
       fetchJson: initialFetchJson,
-    }), LOCAL_ONLY);
+    }), CLOUD_CONFLICT);
 
     const reloadedStorage = memoryStorage(storage.dump());
     const retryCalls = [];
     const retryFetchJson = async (url, options) => {
       retryCalls.push({ url, options });
       if (options?.method === 'PUT') {
+        const body = JSON.parse(options.body);
+        assert.equal(body.expectedVersion, 8);
         return {
           ok: true,
-          json: async () => ({ state: retryState, updatedAt: '2026-04-30T00:00:00.000Z', version: 8 }),
+          json: async () => ({ state: retryState, updatedAt: '2026-04-30T00:00:00.000Z', version: 9 }),
         };
       }
       throw new Error('dirty local state should skip cloud load after reload');
@@ -1951,8 +1959,8 @@ test('saveStateEverywhere preserves expectedVersion for dirty conflict retry aft
 
     const retryPutBody = JSON.parse(retryCalls.find((call) => call.options?.method === 'PUT').options.body);
     assert.deepEqual(loadedAfterReload.state, localConflictState);
-    assert.equal(loadedAfterReload.syncStatus, LOCAL_ONLY);
-    assert.equal(retryPutBody.expectedVersion, 7);
+    assert.equal(loadedAfterReload.syncStatus, CLOUD_CONFLICT);
+    assert.equal(retryPutBody.expectedVersion, 8);
     assert.equal(retryStatus, CLOUD_SYNCED);
   } finally {
     console.warn = originalWarn;
@@ -1973,6 +1981,7 @@ test('saveStateEverywhere keeps dirty base version when in-flight cloud load ret
   const localDirtyState = { ...savedState, startedAt: '2026-04-29' };
   const retryState = { ...savedState, startedAt: '2026-04-30' };
   const putBodies = [];
+  let getCalls = 0;
   const fetchJson = async (url, options) => {
     if (options?.method === 'PUT') {
       putBodies.push(JSON.parse(options.body));
@@ -1985,7 +1994,18 @@ test('saveStateEverywhere keeps dirty base version when in-flight cloud load ret
       }
       return {
         ok: true,
-        json: async () => ({ state: retryState, updatedAt: '2026-04-30T00:00:00.000Z', version: 8 }),
+        json: async () => ({ state: retryState, updatedAt: '2026-04-30T00:00:00.000Z', version: 9 }),
+      };
+    }
+    getCalls += 1;
+    if (getCalls > 1) {
+      return {
+        ok: true,
+        json: async () => ({
+          state: { ...savedState, startedAt: '2026-04-28' },
+          updatedAt: '2026-04-28T00:00:00.000Z',
+          version: 8,
+        }),
       };
     }
     return cloudGet.promise;
@@ -2006,7 +2026,7 @@ test('saveStateEverywhere keeps dirty base version when in-flight cloud load ret
       storage,
       storageKey: 'study-state',
       fetchJson,
-    }), LOCAL_ONLY);
+    }), CLOUD_CONFLICT);
 
     cloudGet.resolve({
       ok: true,
@@ -2014,7 +2034,7 @@ test('saveStateEverywhere keeps dirty base version when in-flight cloud load ret
     });
     const loaded = await loadPromise;
     assert.deepEqual(loaded.state, localDirtyState);
-    assert.equal(loaded.syncStatus, LOCAL_ONLY);
+    assert.equal(loaded.syncStatus, CLOUD_CONFLICT);
 
     assert.equal(await saveStateEverywhere({
       state: retryState,
@@ -2024,7 +2044,7 @@ test('saveStateEverywhere keeps dirty base version when in-flight cloud load ret
     }), CLOUD_SYNCED);
 
     assert.equal(putBodies[0].expectedVersion, 7);
-    assert.equal(putBodies[1].expectedVersion, 7);
+    assert.equal(putBodies[1].expectedVersion, 8);
   } finally {
     cloudGet.resolve({
       ok: true,

@@ -6,6 +6,7 @@ const requiredStatuses = [
   'cloud-synced',
   'cloud-only',
   'cloud-load-failed',
+  'cloud-conflict',
   'local-only',
   'save-failed',
 ];

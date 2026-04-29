@@ -45,3 +45,20 @@ test('static server does not serve dotfiles such as .env', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('static server rejects malformed percent-encoded paths', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'exam-static-'));
+  await writeFile(join(root, 'index.html'), '<h1>ok</h1>');
+  const app = await startStaticServer({ root });
+
+  try {
+    const response = await fetch(`${app.baseUrl}/%E0%A4%A`);
+    const body = await response.text();
+
+    assert.equal(response.status, 404);
+    assert.equal(body, 'Not found');
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

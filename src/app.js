@@ -1,6 +1,7 @@
 import { knowledgePoints, paperTemplates, studyPlan } from './data.js';
 import {
   CLOUD_LOAD_FAILED,
+  CLOUD_CONFLICT,
   CLOUD_ONLY,
   CLOUD_SYNCED,
   LOCAL_ONLY,
@@ -46,6 +47,7 @@ function syncStatusText(status) {
   if (status === CLOUD_SYNCED) return '云端已同步';
   if (status === CLOUD_ONLY) return '云端已保存，本地缓存失败';
   if (status === CLOUD_LOAD_FAILED) return '云端读取失败，使用本地缓存';
+  if (status === CLOUD_CONFLICT) return '云端有冲突，本地进度已保留';
   if (status === SAVE_FAILED) return '保存失败，请检查网络或存储空间';
   return '本地暂存';
 }

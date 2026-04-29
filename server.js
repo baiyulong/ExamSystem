@@ -16,7 +16,12 @@ const contentTypes = {
 };
 
 function safePath(urlPath, { root }) {
-  const decoded = decodeURIComponent(urlPath.split('?')[0]);
+  let decoded;
+  try {
+    decoded = decodeURIComponent(urlPath.split('?')[0]);
+  } catch {
+    return null;
+  }
   const segments = decoded.split('/').filter(Boolean);
   if (segments.some((segment) => segment.startsWith('.'))) return null;
   const candidate = normalize(join(root, decoded === '/' ? 'index.html' : decoded));

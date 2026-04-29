@@ -3,8 +3,17 @@ import { validateStudyState } from './stateSchema.js';
 export const CLOUD_SYNCED = 'cloud-synced';
 export const CLOUD_ONLY = 'cloud-only';
 export const CLOUD_LOAD_FAILED = 'cloud-load-failed';
+export const CLOUD_CONFLICT = 'cloud-conflict';
 export const LOCAL_ONLY = 'local-only';
 export const SAVE_FAILED = 'save-failed';
+
+class HttpResponseError extends Error {
+  constructor(message, { status }) {
+    super(message);
+    this.name = 'HttpResponseError';
+    this.status = status;
+  }
+}
 
 function localSyncMetadataKey(storageKey) {
   return `${storageKey}:sync-metadata`;
@@ -81,6 +90,7 @@ function readLocalSyncMetadata({ storage, storageKey }) {
       saveId: typeof metadata?.saveId === 'string' ? metadata.saveId : undefined,
       cloudVersionKnown: hasCloudVersion && (Number.isInteger(cloudVersion) || cloudVersion === null),
       cloudVersion,
+      conflict: metadata?.conflict === true,
     };
     if (fallbackMetadata?.dirty
       && (!parsedMetadata.dirty || parsedMetadata.saveId !== fallbackMetadata.saveId)) {
@@ -112,6 +122,7 @@ function readLocalDirtyFallback({ storage, storageKey }) {
       saveId: typeof metadata?.saveId === 'string' ? metadata.saveId : undefined,
       cloudVersionKnown: hasCloudVersion && (Number.isInteger(cloudVersion) || cloudVersion === null),
       cloudVersion,
+      conflict: metadata?.conflict === true,
     };
   } catch (error) {
     console.warn('Local sync fallback metadata is invalid; treating local cache as local-only.', error);
@@ -124,6 +135,7 @@ function writeLocalSyncMetadata({
   saveId,
   cloudVersion,
   cloudVersionKnown = false,
+  conflict = false,
   storage,
   storageKey,
 }) {
@@ -135,6 +147,9 @@ function writeLocalSyncMetadata({
   if (cloudVersionKnown) {
     metadata.cloudVersion = cloudVersion;
   }
+  if (conflict) {
+    metadata.conflict = true;
+  }
   storage.setItem(localSyncMetadataKey(storageKey), JSON.stringify(metadata));
 }
 
@@ -142,6 +157,7 @@ function writeLocalDirtyFallback({
   saveId,
   cloudVersion,
   cloudVersionKnown = false,
+  conflict = false,
   storage,
   storageKey,
 }) {
@@ -152,6 +168,9 @@ function writeLocalDirtyFallback({
   };
   if (cloudVersionKnown) {
     metadata.cloudVersion = cloudVersion;
+  }
+  if (conflict) {
+    metadata.conflict = true;
   }
   storage.setItem(localDirtyFallbackKey(storageKey), JSON.stringify(metadata));
 }
@@ -217,17 +236,83 @@ function preserveLocalOnlyState({ state, saveId, storage, storageKey }) {
   }
 }
 
+function markLocalConflict({
+  saveId,
+  cloudVersion,
+  cloudVersionKnown = false,
+  storage,
+  storageKey,
+}) {
+  try {
+    writeLocalSyncMetadata({
+      dirty: true,
+      saveId,
+      cloudVersion,
+      cloudVersionKnown,
+      conflict: true,
+      storage,
+      storageKey,
+    });
+    return true;
+  } catch (error) {
+    console.warn('Local sync metadata update failed.', error);
+    try {
+      writeLocalDirtyFallback({
+        saveId,
+        cloudVersion,
+        cloudVersionKnown,
+        conflict: true,
+        storage,
+        storageKey,
+      });
+      return true;
+    } catch (fallbackError) {
+      console.warn('Local sync fallback metadata update failed.', fallbackError);
+      return false;
+    }
+  }
+}
+
+function preserveConflictedLocalState({
+  state,
+  saveId,
+  cloudVersion,
+  cloudVersionKnown = false,
+  storage,
+  storageKey,
+}) {
+  try {
+    const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
+    if (currentMetadata.dirty && currentMetadata.saveId !== saveId) {
+      return false;
+    }
+    writeLocalState({ state, storage, storageKey });
+    return markLocalConflict({
+      saveId,
+      cloudVersion,
+      cloudVersionKnown,
+      storage,
+      storageKey,
+    });
+  } catch (error) {
+    console.warn('Local cache recovery failed after cloud conflict.', error);
+    return false;
+  }
+}
+
 function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, storageKey }) {
   try {
     const currentMetadata = readLocalSyncMetadata({ storage, storageKey });
     if (expectedSaveId && currentMetadata.dirty && currentMetadata.saveId !== expectedSaveId) {
       const dirtySaveBelongsToThisContext = localSaveIds.has(currentMetadata.saveId);
       if (!dirtySaveBelongsToThisContext) {
-        return true;
+        return { ok: true, staleCompletion: false };
       }
     }
     if (expectedSaveId && latestLocalSaveAttemptId && latestLocalSaveAttemptId !== expectedSaveId) {
+      let staleCompletion = false;
       if (currentMetadata.dirty) {
+        staleCompletion = true;
         const knownCloudVersion = getKnownCloudVersion({ storage, storageKey });
         writeLocalSyncMetadata({
           dirty: true,
@@ -238,12 +323,12 @@ function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, 
           storageKey,
         });
       }
-      return true;
+      return { ok: true, staleCompletion };
     }
     const knownCloudVersion = getKnownCloudVersion({ storage, storageKey });
     const shouldRememberCloudVersion = rememberCloudVersion && knownCloudVersion.known;
     if (!rememberCloudVersion && !currentMetadata.dirty) {
-      return true;
+      return { ok: true, staleCompletion: false };
     }
     writeLocalSyncMetadata({
       dirty: false,
@@ -256,9 +341,9 @@ function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, 
     clearLocalDirtyFallback({ storage, storageKey });
   } catch (error) {
     console.warn('Local sync metadata update failed.', error);
-    return false;
+    return { ok: false, staleCompletion: false };
   }
-  return true;
+  return { ok: true, staleCompletion: false };
 }
 
 function setKnownCloudVersion({ storage, storageKey, version }) {
@@ -312,11 +397,21 @@ async function readResponseJson(response) {
     try {
       payload = await response.json();
     } catch {
-      throw new Error(detail);
+      throw new HttpResponseError(detail, { status: response.status });
     }
-    throw new Error(payload?.error ?? detail);
+    throw new HttpResponseError(payload?.error ?? detail, { status: response.status });
   }
   return response.json();
+}
+
+async function refreshCloudVersionAfterConflict({ fetchJson, storage, storageKey }) {
+  const response = await fetchJson('/api/state');
+  const payload = await readResponseJson(response);
+  setKnownCloudVersion({ storage, storageKey, version: payload.version });
+  return {
+    known: true,
+    version: Number.isInteger(payload.version) ? payload.version : null,
+  };
 }
 
 export async function loadInitialState({
@@ -331,7 +426,7 @@ export async function loadInitialState({
   const localSyncMetadata = readLocalSyncMetadata({ storage, storageKey });
 
   if (localCache.hasValidLocalState && localSyncMetadata.dirty) {
-    return { state: localState, syncStatus: LOCAL_ONLY };
+    return { state: localState, syncStatus: localSyncMetadata.conflict ? CLOUD_CONFLICT : LOCAL_ONLY };
   }
 
   try {
@@ -350,7 +445,10 @@ export async function loadInitialState({
       if (freshLocalSyncMetadata.dirty) {
         const freshLocalCache = readLocalState({ storage, storageKey, createInitialState });
         if (freshLocalCache.hasValidLocalState) {
-          return { state: freshLocalCache.state, syncStatus: LOCAL_ONLY };
+          return {
+            state: freshLocalCache.state,
+            syncStatus: freshLocalSyncMetadata.conflict ? CLOUD_CONFLICT : LOCAL_ONLY,
+          };
         }
       }
       const shouldCache = shouldCacheLoadedState({ state: cloudState, localState });
@@ -402,11 +500,35 @@ async function saveCloudState({
       storage,
       storageKey,
     });
-    if (!localWriteSucceeded && !localCleanMetadataSucceeded) {
+    if (!localWriteSucceeded && !localCleanMetadataSucceeded.ok) {
       return SAVE_FAILED;
+    }
+    if (localCleanMetadataSucceeded.staleCompletion) {
+      return LOCAL_ONLY;
     }
     return localWriteSucceeded ? CLOUD_SYNCED : CLOUD_ONLY;
   } catch (error) {
+    if (error.status === 409 && localWriteSucceeded && localDirtyMetadataSucceeded) {
+      let latestCloudVersion = { known: false, version: undefined };
+      try {
+        latestCloudVersion = await refreshCloudVersionAfterConflict({ fetchJson, storage, storageKey });
+      } catch (refreshError) {
+        console.warn('Cloud conflict detected but latest cloud version could not be loaded.', refreshError);
+      }
+      if (preserveConflictedLocalState({
+        state,
+        saveId: localSaveId,
+        cloudVersion: latestCloudVersion.version,
+        cloudVersionKnown: latestCloudVersion.known,
+        storage,
+        storageKey,
+      })) {
+        console.warn('Cloud state save conflicted; local cache is preserved.', error);
+        return CLOUD_CONFLICT;
+      }
+      console.warn('Cloud state save conflicted and local cache could not be preserved.', error);
+      return SAVE_FAILED;
+    }
     if (localWriteSucceeded && localDirtyMetadataSucceeded
       && preserveLocalOnlyState({ state, saveId: localSaveId, storage, storageKey })) {
       console.warn('Cloud state save failed; local cache is preserved.', error);

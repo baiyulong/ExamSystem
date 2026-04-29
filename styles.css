@@ -110,6 +110,12 @@ textarea {
   color: #9a3412;
 }
 
+.sync-status[data-status="cloud-conflict"] {
+  border-color: #fde68a;
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .sync-status[data-status="local-only"] {
   border-color: rgba(255, 255, 255, .44);
   background: rgba(255, 255, 255, .16);
