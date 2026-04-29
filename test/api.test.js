@@ -169,7 +169,7 @@ test('PUT /api/state returns 500 for unexpected repository errors', async () => 
     const response = await fetch(`${app.baseUrl}/api/state`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: validState }),
+      body: JSON.stringify({ state: validState, expectedVersion: 0 }),
     });
     const payload = await response.json();
 
@@ -284,6 +284,58 @@ test('PUT /api/state validates and saves study state', async () => {
     assert.equal(expectedVersion, 0);
     assert.deepEqual(payload.state, validState);
     assert.equal(payload.version, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test('PUT /api/state rejects missing expectedVersion without saving', async () => {
+  let saveCalled = false;
+  const app = await startApiServer({
+    loadState: async () => ({ state: null, updatedAt: null }),
+    saveState: async () => {
+      saveCalled = true;
+    },
+    health: async () => ({ configured: true, reachable: true }),
+  });
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state: validState }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(payload, { error: 'Invalid expected version' });
+    assert.equal(saveCalled, false);
+  } finally {
+    await app.close();
+  }
+});
+
+test('PUT /api/state rejects null expectedVersion without saving', async () => {
+  let saveCalled = false;
+  const app = await startApiServer({
+    loadState: async () => ({ state: null, updatedAt: null }),
+    saveState: async () => {
+      saveCalled = true;
+    },
+    health: async () => ({ configured: true, reachable: true }),
+  });
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state: validState, expectedVersion: null }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(payload, { error: 'Invalid expected version' });
+    assert.equal(saveCalled, false);
   } finally {
     await app.close();
   }

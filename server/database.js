@@ -85,6 +85,9 @@ export function createDatabaseStateRepository({
         throw new Error('DATABASE_URL is not configured');
       }
       const validState = validateStudyState(state);
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+        throw new Error('Invalid expected version');
+      }
       await ensureSchema();
       const params = [STATE_ROW_ID, JSON.stringify(validState)];
       let result;
@@ -98,7 +101,7 @@ export function createDatabaseStateRepository({
           `,
           params,
         );
-      } else if (Number.isInteger(expectedVersion)) {
+      } else {
         params.push(expectedVersion);
         result = await pool.query(
           `
@@ -111,22 +114,8 @@ export function createDatabaseStateRepository({
           `,
           params,
         );
-      } else {
-        result = await pool.query(
-          `
-          insert into study_state (id, state, version, updated_at)
-          values ($1, $2::jsonb, 1, now())
-          on conflict (id)
-          do update set
-            state = excluded.state,
-            version = study_state.version + 1,
-            updated_at = now()
-          returning state, updated_at, version
-          `,
-          params,
-        );
       }
-      if (Number.isInteger(expectedVersion) && result.rowCount === 0) {
+      if (result.rowCount === 0) {
         throw new StudyStateConflictError();
       }
       return {

@@ -28,7 +28,7 @@ The app will continue to run with `npm start`. `server.js` will become a small H
 1. Serve static assets such as `index.html`, `styles.css`, and `src/*.js`.
 2. Expose JSON API endpoints used by the frontend:
    - `GET /api/state` loads the latest saved study state.
-   - `PUT /api/state` saves the complete study state.
+   - `PUT /api/state` saves the complete study state with a required `expectedVersion` for optimistic concurrency.
    - `GET /api/health` reports whether the database connection is configured and reachable.
 
 The frontend will no longer treat `localStorage` as the source of truth. Instead:

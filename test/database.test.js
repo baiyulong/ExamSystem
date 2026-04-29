@@ -286,7 +286,33 @@ test('saveState validates before querying the database', async () => {
   assert.equal(pool.calls.length, 0);
 });
 
-test('saveState upserts and returns saved state plus ISO updatedAt', async () => {
+test('saveState rejects missing expectedVersion before querying the database', async () => {
+  const pool = createMockPool(async () => {
+    throw new Error('should not be called');
+  });
+  const repository = createDatabaseStateRepository({ pool });
+
+  await assert.rejects(
+    () => repository.saveState(validState),
+    /Invalid expected version/,
+  );
+  assert.equal(pool.calls.length, 0);
+});
+
+test('saveState rejects null expectedVersion before querying the database', async () => {
+  const pool = createMockPool(async () => {
+    throw new Error('should not be called');
+  });
+  const repository = createDatabaseStateRepository({ pool });
+
+  await assert.rejects(
+    () => repository.saveState(validState, { expectedVersion: null }),
+    /Invalid expected version/,
+  );
+  assert.equal(pool.calls.length, 0);
+});
+
+test('saveState inserts expectedVersion 0 and returns saved state plus ISO updatedAt', async () => {
   const updatedAt = new Date('2026-04-28T11:22:33.000Z');
   const pool = createMockPool(async (sql, params) => {
     if (sql.includes('create table if not exists study_state')) {
@@ -300,7 +326,7 @@ test('saveState upserts and returns saved state plus ISO updatedAt', async () =>
   });
   const repository = createDatabaseStateRepository({ pool });
 
-  await assert.deepEqual(await repository.saveState(validState), {
+  await assert.deepEqual(await repository.saveState(validState, { expectedVersion: 0 }), {
     state: validState,
     updatedAt: updatedAt.toISOString(),
     version: 1,
@@ -324,7 +350,7 @@ test('saveState returns the validated input state even if the database echoes ma
   });
   const repository = createDatabaseStateRepository({ pool });
 
-  await assert.deepEqual(await repository.saveState(validState), {
+  await assert.deepEqual(await repository.saveState(validState, { expectedVersion: 0 }), {
     state: validState,
     updatedAt: updatedAt.toISOString(),
     version: 1,

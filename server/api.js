@@ -76,7 +76,7 @@ export async function routeApiRequest(request, response, { repository, logger = 
       const payload = await readJsonBody(request);
       const state = validateStudyState(payload?.state);
       const expectedVersion = payload?.expectedVersion;
-      if (expectedVersion != null && (!Number.isInteger(expectedVersion) || expectedVersion < 0)) {
+      if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
         sendJson(response, 400, { error: 'Invalid expected version' });
         return true;
       }

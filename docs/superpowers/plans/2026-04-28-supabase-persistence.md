@@ -4,7 +4,7 @@
 
 **Goal:** Save all mutable study progress to Supabase PostgreSQL while keeping localStorage as a fast fallback cache.
 
-**Architecture:** The browser will continue to run the existing web/PWA UI, but it will call same-origin Node endpoints for persistence. The Node server will read `DATABASE_URL` from `.env`, initialize a single `study_state` table, and expose `GET /api/state`, `PUT /api/state`, and `GET /api/health`.
+**Architecture:** The browser will continue to run the existing web/PWA UI, but it will call same-origin Node endpoints for persistence. The Node server will read `DATABASE_URL` from `.env`, initialize a single `study_state` table, and expose `GET /api/state`, `PUT /api/state`, and `GET /api/health`. Saves through `PUT /api/state` must include `expectedVersion` so stale clients cannot overwrite newer cloud progress.
 
 **Tech Stack:** Node.js ES modules, native `node:test`, `pg`, `dotenv`, browser `fetch`, `localStorage`, Supabase PostgreSQL.
 
