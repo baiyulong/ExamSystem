@@ -22,6 +22,13 @@ function sendJson(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function sanitizeHealthPayload(payload) {
+  return {
+    configured: payload?.configured === true,
+    reachable: payload?.reachable === true,
+  };
+}
+
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -63,7 +70,7 @@ export async function routeApiRequest(request, response, { repository, logger = 
 
   try {
     if (request.method === 'GET' && url.pathname === '/api/health') {
-      sendJson(response, 200, await repository.health());
+      sendJson(response, 200, sanitizeHealthPayload(await repository.health()));
       return true;
     }
 

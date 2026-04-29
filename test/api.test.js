@@ -496,3 +496,27 @@ test('GET /api/health returns repository health', async () => {
     await app.close();
   }
 });
+
+test('GET /api/health does not expose repository error details', async () => {
+  const app = await startApiServer({
+    loadState: async () => ({ state: null, updatedAt: null }),
+    saveState: async () => {},
+    health: async () => ({
+      configured: true,
+      reachable: false,
+      error: 'getaddrinfo ENOTFOUND db.secret-project.supabase.co',
+    }),
+  });
+
+  try {
+    const response = await fetch(`${app.baseUrl}/api/health`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(payload, { configured: true, reachable: false });
+    assert.equal(JSON.stringify(payload).includes('secret-project'), false);
+    assert.equal(JSON.stringify(payload).includes('supabase.co'), false);
+  } finally {
+    await app.close();
+  }
+});

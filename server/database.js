@@ -54,8 +54,8 @@ export function createDatabaseStateRepository({
         await ensureSchema();
         await pool.query('select 1');
         return { configured: true, reachable: true };
-      } catch (error) {
-        return { configured: true, reachable: false, error: error.message };
+      } catch {
+        return { configured: true, reachable: false };
       }
     },
 

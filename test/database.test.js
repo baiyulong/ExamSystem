@@ -165,7 +165,6 @@ test('health retries schema after transient failure', async () => {
   await assert.deepEqual(await repository.health(), {
     configured: true,
     reachable: false,
-    error: 'transient schema failure',
   });
 
   await assert.deepEqual(await repository.health(), {
@@ -176,17 +175,20 @@ test('health retries schema after transient failure', async () => {
   assert.equal(pool.calls.filter(({ sql }) => sql === 'select 1').length, 1);
 });
 
-test('health returns false and error message when the pool fails', async () => {
+test('health returns false without exposing raw database errors when the pool fails', async () => {
   const pool = createMockPool(async () => {
-    throw new Error('boom');
+    throw new Error('getaddrinfo ENOTFOUND db.secret-project.supabase.co');
   });
   const repository = createDatabaseStateRepository({ pool });
 
-  await assert.deepEqual(await repository.health(), {
+  const health = await repository.health();
+
+  assert.deepEqual(health, {
     configured: true,
     reachable: false,
-    error: 'boom',
   });
+  assert.equal(JSON.stringify(health).includes('secret-project'), false);
+  assert.equal(JSON.stringify(health).includes('supabase.co'), false);
 });
 
 test('loadState returns null state when no pool', async () => {
