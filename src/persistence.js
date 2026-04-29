@@ -123,10 +123,13 @@ function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, 
           storageKey,
         });
       }
-      return;
+      return true;
     }
     const knownCloudVersion = getKnownCloudVersion({ storage, storageKey });
     const shouldRememberCloudVersion = rememberCloudVersion && knownCloudVersion.known;
+    if (!rememberCloudVersion && !currentMetadata.dirty) {
+      return true;
+    }
     writeLocalSyncMetadata({
       dirty: false,
       saveId: expectedSaveId ?? currentMetadata.saveId,
@@ -137,7 +140,9 @@ function markLocalClean({ expectedSaveId, rememberCloudVersion = true, storage, 
     });
   } catch (error) {
     console.warn('Local sync metadata update failed.', error);
+    return false;
   }
+  return true;
 }
 
 function setKnownCloudVersion({ storage, storageKey, version }) {
@@ -275,12 +280,15 @@ async function saveCloudState({
     });
     const payload = await readResponseJson(response);
     setKnownCloudVersion({ storage, storageKey, version: payload.version });
-    markLocalClean({
+    const localCleanMetadataSucceeded = markLocalClean({
       expectedSaveId: localSaveId,
       rememberCloudVersion: localWriteSucceeded,
       storage,
       storageKey,
     });
+    if (!localWriteSucceeded && !localCleanMetadataSucceeded) {
+      return SAVE_FAILED;
+    }
     return localWriteSucceeded ? CLOUD_SYNCED : CLOUD_ONLY;
   } catch (error) {
     if (localWriteSucceeded && localDirtyMetadataSucceeded) {

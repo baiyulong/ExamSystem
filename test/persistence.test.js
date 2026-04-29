@@ -1243,6 +1243,77 @@ test('successful cloud-only save supersedes older dirty local cache after local 
   }
 });
 
+test('cloud-only save reports failure when stale dirty metadata cannot be cleared', async () => {
+  const backingStorage = memoryStorage();
+  let failNextStateWrite = false;
+  let failNextMetadataClean = false;
+  const storage = {
+    getItem: backingStorage.getItem,
+    setItem: (key, value) => {
+      if (key === 'study-state' && failNextStateWrite) {
+        failNextStateWrite = false;
+        throw new Error('QuotaExceededError');
+      }
+      if (key === 'study-state:sync-metadata' && failNextMetadataClean) {
+        const metadata = JSON.parse(value);
+        if (metadata.dirty === false) {
+          failNextMetadataClean = false;
+          throw new Error('QuotaExceededError');
+        }
+      }
+      backingStorage.setItem(key, value);
+    },
+    dump: backingStorage.dump,
+  };
+  const olderState = { ...savedState, startedAt: '2026-04-27' };
+  const newerCloudState = { ...savedState, startedAt: '2026-04-30' };
+  const fetchJson = async (url, options) => {
+    if (options?.method === 'PUT') {
+      const requestBody = JSON.parse(options.body);
+      if (requestBody.state.startedAt === olderState.startedAt) {
+        return {
+          ok: false,
+          status: 503,
+          json: async () => ({ error: 'offline' }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ state: newerCloudState, updatedAt: '2026-04-30T00:00:00.000Z', version: 9 }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ state: newerCloudState, updatedAt: '2026-04-30T00:00:00.000Z', version: 9 }),
+    };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const olderStatus = await saveStateEverywhere({
+      state: olderState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+    failNextStateWrite = true;
+    failNextMetadataClean = true;
+    const newerStatus = await saveStateEverywhere({
+      state: newerCloudState,
+      storage,
+      storageKey: 'study-state',
+      fetchJson,
+    });
+
+    assert.equal(olderStatus, LOCAL_ONLY);
+    assert.equal(newerStatus, SAVE_FAILED);
+    assert.equal(JSON.parse(storage.dump()['study-state:sync-metadata']).dirty, true);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('saveStateEverywhere reports cloud-only when local cache write fails', async () => {
   const warnings = [];
   const storage = {
