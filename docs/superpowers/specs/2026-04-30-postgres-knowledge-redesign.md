@@ -50,10 +50,10 @@ PostgreSQL 10.122.130.168:32825
 | `server/database.js` | 重写：5 张表的 CRUD，删除版本冲突逻辑 |
 | `server/api.js` | 重写：10+ REST 端点 |
 | `src/app.js` | 重写：所有数据改为异步 fetch，删除 localStorage 引用 |
-| `src/studyEngine.js` | 移至 server 端（或保留纯函数在 server 端调用） |
+| `src/studyEngine.js` | 保留为纯函数文件，在 `server/api.js` 中直接 import 使用 |
 | `styles.css` | 删除同步状态样式，添加知识点卡片展开样式 |
 | `index.html` | 删除 `#sync-status` 元素 |
-| `service-worker.js` | 移除，或仅缓存静态资源（不缓存 API） |
+| `service-worker.js` | 保留，但删除 API 状态缓存相关逻辑，只缓存静态资源（HTML/CSS/JS） |
 
 ### 新增的文件
 

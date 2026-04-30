@@ -1,445 +1,145 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createDatabaseStateRepository } from '../server/database.js';
-import { StudyStateValidationError } from '../src/stateSchema.js';
+import * as db from '../server/database.js';
 
-const validState = {
-  cards: [
-    {
-      id: 'card-1',
-      knowledgeId: 'knowledge-1',
-      question: 'Question?',
-      answer: 'Answer.',
-      priority: 'P0',
-      intervalIndex: 0,
-      reviewCount: 0,
-      lapseCount: 0,
-      nextReviewAt: '2026-04-28',
-      status: 'learning',
-    },
-  ],
-  plan: [
-    {
-      id: 'plan-1',
-      week: 1,
-      phase: 'Phase 1',
-      title: 'Title',
-      focus: 'Focus',
-      status: 'in-progress',
-    },
-  ],
-  wrongItems: [
-    {
-      id: 'wrong-1',
-      title: 'Wrong item',
-      reason: 'Reason',
-      createdAt: '2026-04-28',
-    },
-  ],
-  startedAt: '2026-04-28',
-};
-
-function createMockPool(queryHandler) {
-  const calls = [];
-  return {
-    calls,
-    query: async (sql, params) => {
-      calls.push({ sql, params });
-      if (/alter table study_state\s+add column if not exists version/i.test(sql)) {
-        return { rowCount: 0, rows: [] };
-      }
-      return queryHandler(sql, params, calls);
-    },
-  };
-}
-
-test('health returns unconfigured false when no pool', async () => {
-  const repository = createDatabaseStateRepository({ pool: null });
-
-  await assert.deepEqual(await repository.health(), {
-    configured: false,
-    reachable: false,
-  });
+test('checkHealth returns ok:true when DB is reachable', async () => {
+  const result = await db.checkHealth();
+  assert.equal(result.ok, true);
 });
 
-test('health ensures schema and checks connectivity', async () => {
-  const pool = createMockPool(async (sql) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql === 'select 1') {
-      return { rowCount: 1, rows: [{ '?column?': 1 }] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  await assert.deepEqual(await repository.health(), {
-    configured: true,
-    reachable: true,
-  });
-  assert.equal(pool.calls.length, 3);
-  assert.match(pool.calls[0].sql, /create table if not exists study_state/i);
-  assert.match(pool.calls[1].sql, /alter table study_state\s+add column if not exists version/i);
-  assert.equal(pool.calls[2].sql, 'select 1');
+test('getDashboard returns numeric counts', async () => {
+  const data = await db.getDashboard();
+  assert.equal(typeof data.due_count, 'number');
+  assert.equal(typeof data.reviewed_count, 'number');
+  assert.equal(typeof data.total_cards, 'number');
+  assert.equal(typeof data.p0_total, 'number');
+  assert.ok(data.total_cards > 0, 'should have seeded knowledge points');
 });
 
-test('health applies version column migration before checking connectivity', async () => {
-  const pool = createMockPool(async (sql) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql.includes('alter table study_state add column if not exists version')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql === 'select 1') {
-      return { rowCount: 1, rows: [{ '?column?': 1 }] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  await assert.deepEqual(await repository.health(), {
-    configured: true,
-    reachable: true,
-  });
-  assert.match(pool.calls[0].sql, /create table if not exists study_state/i);
-  assert.match(pool.calls[1].sql, /alter table study_state\s+add column if not exists version/i);
-  assert.equal(pool.calls[2].sql, 'select 1');
+test('getKnowledgePoints returns sorted list with required fields', async () => {
+  const points = await db.getKnowledgePoints();
+  assert.ok(points.length > 0);
+  assert.ok(points[0].id, 'has id');
+  assert.ok(points[0].title, 'has title');
+  assert.ok(points[0].priority, 'has priority');
+  assert.ok(points[0].module, 'has module');
+  // First item should be P0 (sorted by priority)
+  assert.equal(points[0].priority, 'P0');
 });
 
-test('concurrent health calls only run schema DDL once', async () => {
-  let resolveSchema;
-  const schemaPromise = new Promise((resolve) => {
-    resolveSchema = resolve;
-  });
-  const pool = createMockPool(async (sql) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return schemaPromise;
-    }
-    if (sql === 'select 1') {
-      return { rowCount: 1, rows: [{ '?column?': 1 }] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  const firstHealth = repository.health();
-  const secondHealth = repository.health();
-
-  await Promise.resolve();
-  assert.equal(pool.calls.length, 1);
-
-  resolveSchema({ rowCount: 0, rows: [] });
-
-  await assert.deepEqual(await firstHealth, {
-    configured: true,
-    reachable: true,
-  });
-  await assert.deepEqual(await secondHealth, {
-    configured: true,
-    reachable: true,
-  });
-  assert.equal(pool.calls.filter(({ sql }) => sql.includes('create table if not exists study_state')).length, 1);
-  assert.equal(pool.calls.filter(({ sql }) => sql === 'select 1').length, 2);
+test('getKnowledgePoint returns full detail for known id', async () => {
+  const all = await db.getKnowledgePoints();
+  const first = all[0];
+  const point = await db.getKnowledgePoint(first.id);
+  assert.ok(point, 'should find the point');
+  assert.equal(point.id, first.id);
+  assert.equal(point.title, first.title);
+  assert.ok(point.content_md !== undefined, 'has content_md field');
 });
 
-test('health retries schema after transient failure', async () => {
-  let schemaAttempts = 0;
-  const pool = createMockPool(async (sql) => {
-    if (sql.includes('create table if not exists study_state')) {
-      schemaAttempts += 1;
-      if (schemaAttempts === 1) {
-        throw new Error('transient schema failure');
-      }
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql === 'select 1') {
-      return { rowCount: 1, rows: [{ '?column?': 1 }] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  await assert.deepEqual(await repository.health(), {
-    configured: true,
-    reachable: false,
-  });
-
-  await assert.deepEqual(await repository.health(), {
-    configured: true,
-    reachable: true,
-  });
-  assert.equal(pool.calls.filter(({ sql }) => sql.includes('create table if not exists study_state')).length, 2);
-  assert.equal(pool.calls.filter(({ sql }) => sql === 'select 1').length, 1);
+test('getKnowledgePoint returns null for unknown id', async () => {
+  const result = await db.getKnowledgePoint('nonexistent-id-xyz-abc');
+  assert.equal(result, null);
 });
 
-test('health returns false without exposing raw database errors when the pool fails', async () => {
-  const pool = createMockPool(async () => {
-    throw new Error('getaddrinfo ENOTFOUND db.secret-project.supabase.co');
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  const health = await repository.health();
-
-  assert.deepEqual(health, {
-    configured: true,
-    reachable: false,
-  });
-  assert.equal(JSON.stringify(health).includes('secret-project'), false);
-  assert.equal(JSON.stringify(health).includes('supabase.co'), false);
+test('getDueCards returns array of cards', async () => {
+  const cards = await db.getDueCards();
+  assert.ok(Array.isArray(cards));
+  if (cards.length > 0) {
+    assert.ok(cards[0].id);
+    assert.ok(cards[0].title);
+    assert.ok(cards[0].question);
+  }
 });
 
-test('loadState returns null state when no pool', async () => {
-  const repository = createDatabaseStateRepository({ pool: null });
+test('recordReview with known=true increments review_count', async () => {
+  const all = await db.getKnowledgePoints();
+  const point = all[0];
+  const before = await db.getKnowledgePoint(point.id);
+  const prevCount = Number(before.review_count ?? 0);
 
-  await assert.deepEqual(await repository.loadState(), {
-    state: null,
-    updatedAt: null,
-    version: null,
-  });
+  const result = await db.recordReview(point.id, true);
+  assert.ok(result.review_count > 0);
+  assert.equal(Number(result.review_count), prevCount + 1);
+  assert.ok(result.next_due);
 });
 
-test('loadState returns null state when no row exists', async () => {
-  const pool = createMockPool(async (sql) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql.includes('select state, updated_at, version from study_state where id = $1')) {
-      return { rowCount: 0, rows: [] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
+test('recordReview with known=false increments lapses', async () => {
+  const all = await db.getKnowledgePoints();
+  const point = all[0];
+  const before = await db.getKnowledgePoint(point.id);
+  const prevLapses = Number(before.lapses ?? 0);
 
-  await assert.deepEqual(await repository.loadState(), {
-    state: null,
-    updatedAt: null,
-    version: null,
-  });
+  const result = await db.recordReview(point.id, false);
+  assert.ok(Number(result.lapses) >= prevLapses + 1);
 });
 
-test('loadState validates and returns state plus ISO updatedAt', async () => {
-  const updatedAt = new Date('2026-04-28T10:20:30.000Z');
-  const pool = createMockPool(async (sql) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql.includes('select state, updated_at, version from study_state where id = $1')) {
-      return { rowCount: 1, rows: [{ state: validState, updated_at: updatedAt, version: 5 }] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  await assert.deepEqual(await repository.loadState(), {
-    state: validState,
-    updatedAt: updatedAt.toISOString(),
-    version: 5,
-  });
+test('getPlan returns 20 weeks ordered by week number', async () => {
+  const plan = await db.getPlan();
+  assert.equal(plan.length, 20);
+  assert.equal(plan[0].week, 1);
+  assert.equal(plan[19].week, 20);
+  assert.ok(plan[0].title);
+  assert.ok(plan[0].status);
 });
 
-test('loadState wraps stored invalid state as a persistence error', async () => {
-  const pool = createMockPool(async (sql) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql.includes('select state, updated_at, version from study_state where id = $1')) {
-      return {
-        rowCount: 1,
-        rows: [{ state: { startedAt: '2026-04-28' }, updated_at: new Date('2026-04-28T10:20:30.000Z') }],
-      };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
+test('updatePlanStatus sets status and returns updated item', async () => {
+  const plan = await db.getPlan();
+  const item = plan[0];
+  const original = item.status;
 
-  await assert.rejects(
-    () => repository.loadState(),
-    (error) => {
-      assert.equal(error instanceof StudyStateValidationError, false);
-      assert.match(error.message, /Stored study state failed validation/);
-      assert.ok(error.cause instanceof StudyStateValidationError);
-      return true;
-    },
-  );
+  const updated = await db.updatePlanStatus(item.id, 'in-progress');
+  assert.ok(updated, 'should return updated row');
+  assert.equal(updated.status, 'in-progress');
+
+  // Restore original status
+  await db.updatePlanStatus(item.id, original);
 });
 
-test('saveState throws when DATABASE_URL is not configured', async () => {
-  const repository = createDatabaseStateRepository({ pool: null });
-
-  await assert.rejects(() => repository.saveState(validState), /DATABASE_URL is not configured/);
+test('updatePlanStatus returns null for nonexistent id', async () => {
+  const result = await db.updatePlanStatus('00000000-0000-0000-0000-000000000000', 'done');
+  assert.equal(result, null);
 });
 
-test('saveState validates before querying the database', async () => {
-  const pool = createMockPool(async () => {
-    throw new Error('should not be called');
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  await assert.rejects(
-    () => repository.saveState({
-      ...validState,
-      cards: [{ ...validState.cards[0], intervalIndex: -1 }],
-    }),
-    StudyStateValidationError,
-  );
-  assert.equal(pool.calls.length, 0);
+test('getPapers returns paper templates with required fields', async () => {
+  const papers = await db.getPapers();
+  assert.ok(papers.length > 0);
+  assert.ok(papers[0].title);
+  assert.ok(papers[0].content_md !== undefined, 'has content_md field');
 });
 
-test('saveState rejects missing expectedVersion before querying the database', async () => {
-  const pool = createMockPool(async () => {
-    throw new Error('should not be called');
-  });
-  const repository = createDatabaseStateRepository({ pool });
+test('addWrongItem and deleteWrongItem roundtrip', async () => {
+  const all = await db.getKnowledgePoints();
+  const point = all[0];
 
-  await assert.rejects(
-    () => repository.saveState(validState),
-    /Invalid expected version/,
-  );
-  assert.equal(pool.calls.length, 0);
+  const item = await db.addWrongItem(point.id, 'integration test note');
+  assert.equal(item.knowledge_id, point.id);
+  assert.equal(item.note, 'integration test note');
+  assert.ok(item.id);
+
+  const deleted = await db.deleteWrongItem(item.id);
+  assert.equal(deleted, true);
 });
 
-test('saveState rejects null expectedVersion before querying the database', async () => {
-  const pool = createMockPool(async () => {
-    throw new Error('should not be called');
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  await assert.rejects(
-    () => repository.saveState(validState, { expectedVersion: null }),
-    /Invalid expected version/,
-  );
-  assert.equal(pool.calls.length, 0);
+test('deleteWrongItem returns false for nonexistent id', async () => {
+  const result = await db.deleteWrongItem(999999999);
+  assert.equal(result, false);
 });
 
-test('saveState inserts expectedVersion 0 and returns saved state plus ISO updatedAt', async () => {
-  const updatedAt = new Date('2026-04-28T11:22:33.000Z');
-  const pool = createMockPool(async (sql, params) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql.includes('insert into study_state')) {
-      assert.deepEqual(params, ['default', JSON.stringify(validState)]);
-      return { rowCount: 1, rows: [{ state: validState, updated_at: updatedAt, version: 1 }] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
+test('getWrongItems returns array with joined knowledge point fields', async () => {
+  const all = await db.getKnowledgePoints();
+  const point = all[0];
 
-  await assert.deepEqual(await repository.saveState(validState, { expectedVersion: 0 }), {
-    state: validState,
-    updatedAt: updatedAt.toISOString(),
-    version: 1,
-  });
-});
-
-test('saveState returns the validated input state even if the database echoes malformed state', async () => {
-  const updatedAt = new Date('2026-04-28T11:22:33.000Z');
-  const pool = createMockPool(async (sql, params) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql.includes('insert into study_state')) {
-      assert.deepEqual(params, ['default', JSON.stringify(validState)]);
-      return {
-        rowCount: 1,
-        rows: [{ state: { cards: [] }, updated_at: updatedAt, version: 1 }],
-      };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  await assert.deepEqual(await repository.saveState(validState, { expectedVersion: 0 }), {
-    state: validState,
-    updatedAt: updatedAt.toISOString(),
-    version: 1,
-  });
-});
-
-test('saveState rejects stale expectedVersion and preserves newer database state', async () => {
-  const originalUpdatedAt = new Date('2026-04-28T10:20:30.000Z');
-  const firstUpdatedAt = new Date('2026-04-28T11:22:33.000Z');
-  const firstClientState = { ...validState, startedAt: '2026-04-29' };
-  const secondClientState = { ...validState, startedAt: '2026-04-30' };
-  let databaseRow = {
-    state: validState,
-    updated_at: originalUpdatedAt,
-    version: 7,
-  };
-  const pool = createMockPool(async (sql, params) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql.includes('select state, updated_at') && sql.includes('version')) {
-      return { rowCount: 1, rows: [databaseRow] };
-    }
-    if (sql.includes('update study_state')) {
-      const [, stateJson, expectedVersion] = params;
-      if (expectedVersion !== databaseRow.version) {
-        return { rowCount: 0, rows: [] };
-      }
-      databaseRow = {
-        state: JSON.parse(stateJson),
-        updated_at: firstUpdatedAt,
-        version: databaseRow.version + 1,
-      };
-      return { rowCount: 1, rows: [databaseRow] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  const clientALoad = await repository.loadState();
-  const clientBLoad = await repository.loadState();
-  const clientASave = await repository.saveState(firstClientState, {
-    expectedVersion: clientALoad.version,
-  });
-
-  await assert.rejects(
-    () => repository.saveState(secondClientState, {
-      expectedVersion: clientBLoad.version,
-    }),
-    (error) => {
-      assert.equal(error.code, 'STUDY_STATE_CONFLICT');
-      assert.match(error.message, /Study state conflict/);
-      return true;
-    },
-  );
-
-  assert.equal(clientALoad.version, 7);
-  assert.equal(clientBLoad.version, 7);
-  assert.equal(clientASave.version, 8);
-  assert.deepEqual((await repository.loadState()).state, firstClientState);
-});
-
-test('saveState rejects positive expectedVersion when no database row exists', async () => {
-  const pool = createMockPool(async (sql) => {
-    if (sql.includes('create table if not exists study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    if (sql.includes('insert into study_state')) {
-      return {
-        rowCount: 1,
-        rows: [{ state: validState, updated_at: new Date('2026-04-28T11:22:33.000Z'), version: 1 }],
-      };
-    }
-    if (sql.includes('update study_state')) {
-      return { rowCount: 0, rows: [] };
-    }
-    throw new Error(`Unexpected SQL: ${sql}`);
-  });
-  const repository = createDatabaseStateRepository({ pool });
-
-  await assert.rejects(
-    () => repository.saveState(validState, { expectedVersion: 7 }),
-    (error) => {
-      assert.equal(error.code, 'STUDY_STATE_CONFLICT');
-      assert.match(error.message, /Study state conflict/);
-      return true;
-    },
-  );
-  assert.equal(pool.calls.some(({ sql }) => sql.includes('insert into study_state')), false);
+  const item = await db.addWrongItem(point.id, 'temp test');
+  try {
+    const items = await db.getWrongItems();
+    assert.ok(Array.isArray(items));
+    const found = items.find((i) => i.id === item.id);
+    assert.ok(found, 'added item should appear in list');
+    assert.ok(found.title, 'has joined title');
+    assert.ok(found.module, 'has joined module');
+  } finally {
+    await db.deleteWrongItem(item.id);
+  }
 });

@@ -4,19 +4,13 @@ import { createServer } from 'node:http';
 
 import { routeApiRequest } from '../server/api.js';
 
-const validState = {
-  cards: [],
-  plan: [],
-  wrongItems: [],
-  startedAt: '2026-04-28',
-};
-
-function startApiServer(repository, logger = { error: () => {} }) {
-  const server = createServer((request, response) => {
-    routeApiRequest(request, response, {
-      repository,
-      logger,
-    });
+function startApiServer() {
+  const server = createServer(async (request, response) => {
+    const handled = await routeApiRequest(request, response);
+    if (!handled) {
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'API route not found' }));
+    }
   });
 
   return new Promise((resolve) => {
@@ -30,493 +24,262 @@ function startApiServer(repository, logger = { error: () => {} }) {
   });
 }
 
-test('GET /api/state returns 500 for unexpected repository errors', async () => {
-  const errors = [];
-  const logger = { error: (...args) => errors.push(args) };
-  const app = await startApiServer({
-    loadState: async () => {
-      throw new Error('Connection reset');
-    },
-    saveState: async () => {},
-    health: async () => ({ configured: true, reachable: true }),
-  }, logger);
-
+test('GET /api/health returns {ok:true} when DB is reachable', async () => {
+  const app = await startApiServer();
   try {
-    const response = await fetch(`${app.baseUrl}/api/state`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 500);
-    assert.deepEqual(payload, { error: 'Persistence service failed' });
-    assert.equal(errors.length, 1);
-    assert.deepEqual(errors[0], [
-      'API request failed',
-      {
-        method: 'GET',
-        path: '/api/state',
-        message: 'Connection reset',
-      },
-    ]);
+    const res = await fetch(`${app.baseUrl}/api/health`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(body.ok, true);
   } finally {
     await app.close();
   }
 });
 
-test('GET /api/state treats non-validation Invalid study state errors as 500', async () => {
-  const errors = [];
-  const logger = { error: (...args) => errors.push(args) };
-  const app = await startApiServer({
-    loadState: async () => {
-      throw new Error('Invalid study state: repository unavailable');
-    },
-    saveState: async () => {},
-    health: async () => ({ configured: true, reachable: true }),
-  }, logger);
-
+test('GET /api/dashboard returns numeric counts', async () => {
+  const app = await startApiServer();
   try {
-    const response = await fetch(`${app.baseUrl}/api/state`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 500);
-    assert.deepEqual(payload, { error: 'Persistence service failed' });
-    assert.equal(errors.length, 1);
-    assert.deepEqual(errors[0], [
-      'API request failed',
-      {
-        method: 'GET',
-        path: '/api/state',
-        message: 'Invalid study state: repository unavailable',
-      },
-    ]);
+    const res = await fetch(`${app.baseUrl}/api/dashboard`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(typeof body.total_cards, 'number');
+    assert.equal(typeof body.due_count, 'number');
+    assert.ok(body.total_cards > 0, 'should have seeded knowledge points');
   } finally {
     await app.close();
   }
 });
 
-test('GET /api/state treats repository Request body is too large errors as 500', async () => {
-  const errors = [];
-  const logger = { error: (...args) => errors.push(args) };
-  const app = await startApiServer({
-    loadState: async () => {
-      throw new Error('Request body is too large');
-    },
-    saveState: async () => {},
-    health: async () => ({ configured: true, reachable: true }),
-  }, logger);
-
+test('GET /api/knowledge returns list of knowledge points', async () => {
+  const app = await startApiServer();
   try {
-    const response = await fetch(`${app.baseUrl}/api/state`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 500);
-    assert.deepEqual(payload, { error: 'Persistence service failed' });
-    assert.equal(errors.length, 1);
-    assert.deepEqual(errors[0], [
-      'API request failed',
-      {
-        method: 'GET',
-        path: '/api/state',
-        message: 'Request body is too large',
-      },
-    ]);
+    const res = await fetch(`${app.baseUrl}/api/knowledge`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(body));
+    assert.ok(body.length > 0);
+    assert.ok(body[0].id, 'points have id');
+    assert.ok(body[0].title, 'points have title');
+    assert.ok(body[0].priority, 'points have priority');
   } finally {
     await app.close();
   }
 });
 
-test('GET /api/state treats repository Request body must be valid JSON errors as 500', async () => {
-  const errors = [];
-  const logger = { error: (...args) => errors.push(args) };
-  const app = await startApiServer({
-    loadState: async () => {
-      throw new Error('Request body must be valid JSON');
-    },
-    saveState: async () => {},
-    health: async () => ({ configured: true, reachable: true }),
-  }, logger);
-
+test('GET /api/knowledge/:id returns single point', async () => {
+  const app = await startApiServer();
   try {
-    const response = await fetch(`${app.baseUrl}/api/state`);
-    const payload = await response.json();
+    const listRes = await fetch(`${app.baseUrl}/api/knowledge`);
+    const list = await listRes.json();
+    const first = list[0];
 
-    assert.equal(response.status, 500);
-    assert.deepEqual(payload, { error: 'Persistence service failed' });
-    assert.equal(errors.length, 1);
-    assert.deepEqual(errors[0], [
-      'API request failed',
-      {
-        method: 'GET',
-        path: '/api/state',
-        message: 'Request body must be valid JSON',
-      },
-    ]);
+    const res = await fetch(`${app.baseUrl}/api/knowledge/${encodeURIComponent(first.id)}`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(body.id, first.id);
+    assert.equal(body.title, first.title);
   } finally {
     await app.close();
   }
 });
 
-test('PUT /api/state returns 500 for unexpected repository errors', async () => {
-  const errors = [];
-  const logger = { error: (...args) => errors.push(args) };
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {
-      throw new Error('Disk full');
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  }, logger);
-
+test('GET /api/knowledge/:id returns 404 for unknown id', async () => {
+  const app = await startApiServer();
   try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
+    const res = await fetch(`${app.baseUrl}/api/knowledge/nonexistent-xyz`);
+    const body = await res.json();
+    assert.equal(res.status, 404);
+    assert.ok(body.error);
+  } finally {
+    await app.close();
+  }
+});
+
+test('GET /api/cards/due returns array', async () => {
+  const app = await startApiServer();
+  try {
+    const res = await fetch(`${app.baseUrl}/api/cards/due`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(body));
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/cards/:id/review with known=true updates progress', async () => {
+  const app = await startApiServer();
+  try {
+    const listRes = await fetch(`${app.baseUrl}/api/knowledge`);
+    const list = await listRes.json();
+    const cardId = list[0].id;
+
+    const res = await fetch(`${app.baseUrl}/api/cards/${encodeURIComponent(cardId)}/review`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ known: true }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.ok(body.review_count > 0);
+    assert.ok(body.next_due);
+
+    // Reset back
+    await fetch(`${app.baseUrl}/api/cards/${encodeURIComponent(cardId)}/review`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ known: false }),
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/cards/:id/review rejects missing known field', async () => {
+  const app = await startApiServer();
+  try {
+    const listRes = await fetch(`${app.baseUrl}/api/knowledge`);
+    const list = await listRes.json();
+    const cardId = list[0].id;
+
+    const res = await fetch(`${app.baseUrl}/api/cards/${encodeURIComponent(cardId)}/review`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ known: 'yes' }),
+    });
+    assert.equal(res.status, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('GET /api/wrong returns array', async () => {
+  const app = await startApiServer();
+  try {
+    const res = await fetch(`${app.baseUrl}/api/wrong`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(body));
+  } finally {
+    await app.close();
+  }
+});
+
+test('POST /api/wrong adds item, DELETE /api/wrong/:id removes it', async () => {
+  const app = await startApiServer();
+  try {
+    const listRes = await fetch(`${app.baseUrl}/api/knowledge`);
+    const list = await listRes.json();
+    const knowledgeId = list[0].id;
+
+    const addRes = await fetch(`${app.baseUrl}/api/wrong`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ knowledge_id: knowledgeId, note: 'test wrong item' }),
+    });
+    const added = await addRes.json();
+    assert.equal(addRes.status, 201);
+    assert.equal(added.knowledge_id, knowledgeId);
+    assert.ok(added.id);
+
+    const delRes = await fetch(`${app.baseUrl}/api/wrong/${added.id}`, { method: 'DELETE' });
+    assert.equal(delRes.status, 204);
+  } finally {
+    await app.close();
+  }
+});
+
+test('GET /api/plan returns 20-week plan', async () => {
+  const app = await startApiServer();
+  try {
+    const res = await fetch(`${app.baseUrl}/api/plan`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(body));
+    assert.equal(body.length, 20);
+    assert.ok(body[0].week);
+    assert.ok(body[0].title);
+  } finally {
+    await app.close();
+  }
+});
+
+test('PUT /api/plan/:id updates plan status', async () => {
+  const app = await startApiServer();
+  try {
+    const planRes = await fetch(`${app.baseUrl}/api/plan`);
+    const plan = await planRes.json();
+    const item = plan[0];
+    const original = item.status;
+
+    const res = await fetch(`${app.baseUrl}/api/plan/${encodeURIComponent(item.id)}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: validState, expectedVersion: 0 }),
+      body: JSON.stringify({ status: 'in-progress' }),
     });
-    const payload = await response.json();
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(body.status, 'in-progress');
 
-    assert.equal(response.status, 500);
-    assert.deepEqual(payload, { error: 'Persistence service failed' });
-    assert.equal(errors.length, 1);
-    assert.deepEqual(errors[0], [
-      'API request failed',
-      {
-        method: 'PUT',
-        path: '/api/state',
-        message: 'Disk full',
-      },
-    ]);
+    // Restore
+    await fetch(`${app.baseUrl}/api/plan/${encodeURIComponent(item.id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: original }),
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+test('PUT /api/plan/:id rejects invalid status', async () => {
+  const app = await startApiServer();
+  try {
+    const planRes = await fetch(`${app.baseUrl}/api/plan`);
+    const plan = await planRes.json();
+
+    const res = await fetch(`${app.baseUrl}/api/plan/${encodeURIComponent(plan[0].id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'invalid-status' }),
+    });
+    assert.equal(res.status, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('GET /api/papers returns paper templates', async () => {
+  const app = await startApiServer();
+  try {
+    const res = await fetch(`${app.baseUrl}/api/papers`);
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(body));
+    assert.ok(body.length > 0);
+    assert.ok(body[0].title);
   } finally {
     await app.close();
   }
 });
 
 test('unknown API routes return 404', async () => {
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {},
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
+  const app = await startApiServer();
   try {
-    const response = await fetch(`${app.baseUrl}/api/unknown`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 404);
-    assert.deepEqual(payload, { error: 'API route not found' });
+    const res = await fetch(`${app.baseUrl}/api/nonexistent`);
+    const body = await res.json();
+    assert.equal(res.status, 404);
+    assert.ok(body.error);
   } finally {
     await app.close();
   }
 });
 
-test('non-API routes return false without writing a response', async () => {
-  let wroteHead = false;
-  let ended = false;
-  const response = {
-    writeHead() {
-      wroteHead = true;
-      throw new Error('writeHead should not be called');
-    },
-    end() {
-      ended = true;
-      throw new Error('end should not be called');
-    },
+test('non-API path returns false without writing response', async () => {
+  const fakeResponse = {
+    writeHead() { throw new Error('should not be called'); },
+    end() { throw new Error('should not be called'); },
   };
-
-  const handled = await routeApiRequest({
-    method: 'GET',
-    url: '/index.html',
-  }, response, {
-    repository: {
-      loadState: async () => ({ state: null, updatedAt: null }),
-      saveState: async () => {},
-      health: async () => ({ configured: true, reachable: true }),
-    },
-    logger: { error: () => {} },
-  });
-
+  const handled = await routeApiRequest({ method: 'GET', url: '/index.html' }, fakeResponse);
   assert.equal(handled, false);
-  assert.equal(wroteHead, false);
-  assert.equal(ended, false);
-});
-
-test('GET /api/state returns the saved state', async () => {
-  const app = await startApiServer({
-    loadState: async () => ({ state: validState, updatedAt: '2026-04-28T00:00:00.000Z', version: 4 }),
-    saveState: async () => {},
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(payload.state, validState);
-    assert.equal(payload.updatedAt, '2026-04-28T00:00:00.000Z');
-    assert.equal(payload.version, 4);
-  } finally {
-    await app.close();
-  }
-});
-
-test('PUT /api/state validates and saves study state', async () => {
-  let saved = null;
-  let expectedVersion = null;
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async (state, options) => {
-      saved = state;
-      expectedVersion = options.expectedVersion;
-      return { state, updatedAt: '2026-04-28T00:00:00.000Z', version: 1 };
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: validState, expectedVersion: 0 }),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(saved, validState);
-    assert.equal(expectedVersion, 0);
-    assert.deepEqual(payload.state, validState);
-    assert.equal(payload.version, 1);
-  } finally {
-    await app.close();
-  }
-});
-
-test('PUT /api/state rejects missing expectedVersion without saving', async () => {
-  let saveCalled = false;
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {
-      saveCalled = true;
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: validState }),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 400);
-    assert.deepEqual(payload, { error: 'Invalid expected version' });
-    assert.equal(saveCalled, false);
-  } finally {
-    await app.close();
-  }
-});
-
-test('PUT /api/state rejects null expectedVersion without saving', async () => {
-  let saveCalled = false;
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {
-      saveCalled = true;
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: validState, expectedVersion: null }),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 400);
-    assert.deepEqual(payload, { error: 'Invalid expected version' });
-    assert.equal(saveCalled, false);
-  } finally {
-    await app.close();
-  }
-});
-
-test('PUT /api/state returns 409 when expectedVersion is stale', async () => {
-  const conflict = new Error('Study state conflict');
-  conflict.code = 'STUDY_STATE_CONFLICT';
-  const app = await startApiServer({
-    loadState: async () => ({ state: validState, updatedAt: '2026-04-28T00:00:00.000Z', version: 3 }),
-    saveState: async () => {
-      throw conflict;
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: { ...validState, startedAt: '2026-04-29' }, expectedVersion: 3 }),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 409);
-    assert.deepEqual(payload, { error: 'Study state conflict' });
-  } finally {
-    await app.close();
-  }
-});
-
-test('PUT /api/state rejects invalid payloads', async () => {
-  let saveCalled = false;
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {
-      saveCalled = true;
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: { cards: [] } }),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 400);
-    assert.equal(payload.error, 'Invalid study state');
-    assert.equal(saveCalled, false);
-  } finally {
-    await app.close();
-  }
-});
-
-test('PUT /api/state rejects null payloads', async () => {
-  let saveCalled = false;
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {
-      saveCalled = true;
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: 'null',
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 400);
-    assert.deepEqual(payload, { error: 'Invalid study state' });
-    assert.equal(saveCalled, false);
-  } finally {
-    await app.close();
-  }
-});
-
-test('PUT /api/state rejects empty payload objects', async () => {
-  let saveCalled = false;
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {
-      saveCalled = true;
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 400);
-    assert.deepEqual(payload, { error: 'Invalid study state' });
-    assert.equal(saveCalled, false);
-  } finally {
-    await app.close();
-  }
-});
-
-test('PUT /api/state rejects oversized multibyte payloads before validation', async () => {
-  let saveCalled = false;
-  const oversizedPadding = '汉'.repeat(333334);
-  const requestBody = JSON.stringify({
-    state: validState,
-    padding: oversizedPadding,
-  });
-
-  assert.ok(Buffer.byteLength(requestBody, 'utf8') > 1_000_000);
-
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {
-      saveCalled = true;
-    },
-    health: async () => ({ configured: true, reachable: true }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/state`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: requestBody,
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 400);
-    assert.deepEqual(payload, { error: 'Request body is too large' });
-    assert.equal(saveCalled, false);
-  } finally {
-    await app.close();
-  }
-});
-
-test('GET /api/health returns repository health', async () => {
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {},
-    health: async () => ({ configured: false, reachable: false }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/health`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(payload, { configured: false, reachable: false });
-  } finally {
-    await app.close();
-  }
-});
-
-test('GET /api/health does not expose repository error details', async () => {
-  const app = await startApiServer({
-    loadState: async () => ({ state: null, updatedAt: null }),
-    saveState: async () => {},
-    health: async () => ({
-      configured: true,
-      reachable: false,
-      error: 'getaddrinfo ENOTFOUND db.secret-project.supabase.co',
-    }),
-  });
-
-  try {
-    const response = await fetch(`${app.baseUrl}/api/health`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(payload, { configured: true, reachable: false });
-    assert.equal(JSON.stringify(payload).includes('secret-project'), false);
-    assert.equal(JSON.stringify(payload).includes('supabase.co'), false);
-  } finally {
-    await app.close();
-  }
 });

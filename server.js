@@ -3,7 +3,6 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { routeApiRequest } from './server/api.js';
-import { createDatabaseStateRepository } from './server/database.js';
 
 const contentTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -30,12 +29,9 @@ function safePath(urlPath, { root }) {
   return candidate;
 }
 
-export function createRequestHandler({
-  root = resolve('.'),
-  repository = createDatabaseStateRepository(),
-} = {}) {
+export function createRequestHandler({ root = resolve('.') } = {}) {
   return async (request, response) => {
-    const handledApi = await routeApiRequest(request, response, { repository });
+    const handledApi = await routeApiRequest(request, response);
     if (handledApi) return;
 
     const filePath = safePath(request.url ?? '/', { root });
